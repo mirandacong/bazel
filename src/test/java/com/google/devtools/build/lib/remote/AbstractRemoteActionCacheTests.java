@@ -38,7 +38,6 @@ import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.clock.JavaClock;
 import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.UploadManifest;
-import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.DigestUtil.ActionKey;
 import com.google.devtools.build.lib.remote.util.Utils;
@@ -49,6 +48,7 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
+import com.google.devtools.common.options.Options;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
@@ -668,10 +668,8 @@ public class AbstractRemoteActionCacheTests {
   }
 
   private DefaultRemoteActionCache newTestCache() {
-    RemoteOptions options = new RemoteOptions();
-    RemoteRetrier retrier =
-        new RemoteRetrier(options, (e) -> false, retryService, Retrier.ALLOW_ALL_CALLS);
-    return new DefaultRemoteActionCache(options, digestUtil, retrier);
+    RemoteOptions options = Options.getDefaults(RemoteOptions.class);
+    return new DefaultRemoteActionCache(options, digestUtil);
   }
 
   private static class DefaultRemoteActionCache extends AbstractRemoteActionCache {
@@ -681,8 +679,8 @@ public class AbstractRemoteActionCacheTests {
     AtomicInteger numSuccess = new AtomicInteger();
     AtomicInteger numFailures = new AtomicInteger();
 
-    public DefaultRemoteActionCache(RemoteOptions options, DigestUtil digestUtil, Retrier retrier) {
-      super(options, digestUtil, retrier);
+    public DefaultRemoteActionCache(RemoteOptions options, DigestUtil digestUtil) {
+      super(options, digestUtil);
     }
 
     public Digest addContents(String txt) throws UnsupportedEncodingException {
@@ -719,13 +717,6 @@ public class AbstractRemoteActionCacheTests {
       return Utils.getFromFuture(f);
     }
 
-    @Override
-    public void ensureInputsPresent(
-        TreeNodeRepository repository, Path execRoot, TreeNode root, Action action, Command command)
-        throws IOException, InterruptedException {
-      throw new UnsupportedOperationException();
-    }
-
     @Nullable
     @Override
     ActionResult getCachedActionResult(ActionKey actionKey)
@@ -740,8 +731,7 @@ public class AbstractRemoteActionCacheTests {
         Command command,
         Path execRoot,
         Collection<Path> files,
-        FileOutErr outErr,
-        boolean uploadAction)
+        FileOutErr outErr)
         throws ExecException, IOException, InterruptedException {
       throw new UnsupportedOperationException();
     }

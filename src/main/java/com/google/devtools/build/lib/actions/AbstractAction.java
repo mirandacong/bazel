@@ -38,7 +38,6 @@ import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.FileSystem;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.build.lib.vfs.Symlinks;
@@ -215,6 +214,8 @@ public abstract class AbstractAction implements Action, ActionApi {
    */
   @Override
   public synchronized void updateInputs(Iterable<Artifact> inputs) {
+    Preconditions.checkState(
+        discoversInputs(), "Can't update inputs unless discovering: %s %s", this, inputs);
     this.inputs = CollectionUtils.makeImmutable(inputs);
     inputsDiscovered = true;
   }
@@ -411,7 +412,7 @@ public abstract class AbstractAction implements Action, ActionApi {
         parentDir.setWritable(true);
         deleteOutput(fileSystem, output);
       } else if (path.isDirectory(Symlinks.NOFOLLOW)) {
-        FileSystemUtils.deleteTree(path);
+        path.deleteTree();
       } else {
         throw e;
       }
@@ -423,22 +424,20 @@ public abstract class AbstractAction implements Action, ActionApi {
    * checking, this method must be called.
    */
   protected void checkInputsForDirectories(
-      EventHandler eventHandler, MetadataProvider metadataProvider) throws ExecException {
+      EventHandler eventHandler, MetadataProvider metadataProvider) throws IOException {
     // Report "directory dependency checking" warning only for non-generated directories (generated
     // ones will be reported earlier).
     for (Artifact input : getMandatoryInputs()) {
       // Assume that if the file did not exist, we would not have gotten here.
-      try {
-        if (input.isSourceArtifact()
-            && metadataProvider.getMetadata(input).getType().isDirectory()) {
-          // TODO(ulfjack): What about dependency checking of special files?
-          eventHandler.handle(Event.warn(getOwner().getLocation(),
-              String.format(
-                  "input '%s' to %s is a directory; dependency checking of directories is unsound",
-                  input.prettyPrint(), getOwner().getLabel())));
-        }
-      } catch (IOException e) {
-        throw new UserExecException(e);
+      if (input.isSourceArtifact() && metadataProvider.getMetadata(input).getType().isDirectory()) {
+        // TODO(ulfjack): What about dependency checking of special files?
+        eventHandler.handle(
+            Event.warn(
+                getOwner().getLocation(),
+                String.format(
+                    "input '%s' to %s is a directory; "
+                        + "dependency checking of directories is unsound",
+                    input.prettyPrint(), getOwner().getLabel())));
       }
     }
   }

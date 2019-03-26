@@ -32,8 +32,6 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.remote.RemoteOptions;
-import com.google.devtools.build.lib.remote.RemoteRetrier;
-import com.google.devtools.build.lib.remote.Retrier;
 import com.google.devtools.build.lib.remote.SimpleBlobStoreActionCache;
 import com.google.devtools.build.lib.remote.SimpleBlobStoreFactory;
 import com.google.devtools.build.lib.remote.blobstore.ConcurrentMapBlobStore;
@@ -105,7 +103,7 @@ public final class RemoteWorker {
       value = System.getProperty("bazel.DigestFunction", "SHA256");
       hashFunction = new DigestFunctionConverter().convert(value);
     } catch (OptionsParsingException e) {
-      throw new Error("The specified hash function '" + value + "' is not supported.");
+      throw new Error("The specified hash function '" + value + "' is not supported.", e);
     }
     return new JavaIoFileSystem(hashFunction);
   }
@@ -260,24 +258,19 @@ public final class RemoteWorker {
     ListeningScheduledExecutorService retryService =
         MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
 
-    RemoteRetrier retrier =
-        new RemoteRetrier(
-            remoteOptions,
-            RemoteRetrier.RETRIABLE_GRPC_ERRORS,
-            retryService,
-            Retrier.ALLOW_ALL_CALLS);
     DigestUtil digestUtil = new DigestUtil(fs.getDigestFunction());
     RemoteWorker worker =
         new RemoteWorker(
             fs,
             remoteWorkerOptions,
-            new SimpleBlobStoreActionCache(remoteOptions, blobStore, retrier, digestUtil),
+            new SimpleBlobStoreActionCache(remoteOptions, blobStore, digestUtil),
             sandboxPath,
             digestUtil);
 
     final Server server = worker.startServer();
 
-    EventLoopGroup bossGroup = null, workerGroup = null;
+    EventLoopGroup bossGroup = null;
+    EventLoopGroup workerGroup = null;
     Channel ch = null;
     if (remoteWorkerOptions.httpListenPort != 0) {
       // Configure the server.

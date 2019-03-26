@@ -30,7 +30,7 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.syntax.Runtime.NoneType;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics.FlagIdentifier;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -59,9 +59,9 @@ public final class FuncallExpression extends Expression {
    */
   private static final class MethodDescriptorKey {
     private final Class<?> clazz;
-    private final SkylarkSemantics semantics;
+    private final StarlarkSemantics semantics;
 
-    private MethodDescriptorKey(Class<?> clazz, SkylarkSemantics semantics) {
+    private MethodDescriptorKey(Class<?> clazz, StarlarkSemantics semantics) {
       this.clazz = clazz;
       this.semantics = semantics;
     }
@@ -70,7 +70,7 @@ public final class FuncallExpression extends Expression {
       return clazz;
     }
 
-    public SkylarkSemantics getSemantics() {
+    public StarlarkSemantics getSemantics() {
       return semantics;
     }
 
@@ -99,7 +99,7 @@ public final class FuncallExpression extends Expression {
                 @Override
                 public Optional<MethodDescriptor> load(MethodDescriptorKey key) throws Exception {
                   Class<?> keyClass = key.getClazz();
-                  SkylarkSemantics semantics = key.getSemantics();
+                  StarlarkSemantics semantics = key.getSemantics();
                   MethodDescriptor returnValue = null;
                   for (Method method : sortMethodArrayByMethodName(keyClass.getMethods())) {
                     // Synthetic methods lead to false multiple matches
@@ -133,7 +133,7 @@ public final class FuncallExpression extends Expression {
                     public Map<String, MethodDescriptor> load(MethodDescriptorKey key)
                         throws Exception {
                       Class<?> keyClass = key.getClazz();
-                      SkylarkSemantics semantics = key.getSemantics();
+                      StarlarkSemantics semantics = key.getSemantics();
                       ImmutableMap.Builder<String, MethodDescriptor> methodMap =
                           ImmutableMap.builder();
                       for (Method method : sortMethodArrayByMethodName(keyClass.getMethods())) {
@@ -311,16 +311,16 @@ public final class FuncallExpression extends Expression {
   /**
    * Returns the Skylark callable Method of objClass with structField=true and the given name.
    *
-   * @deprecated use {@link #getStructField(SkylarkSemantics, Class, String)} instead
+   * @deprecated use {@link #getStructField(StarlarkSemantics, Class, String)} instead
    */
   @Deprecated
   public static MethodDescriptor getStructField(Class<?> objClass, String methodName) {
-    return getStructField(SkylarkSemantics.DEFAULT_SEMANTICS, objClass, methodName);
+    return getStructField(StarlarkSemantics.DEFAULT_SEMANTICS, objClass, methodName);
   }
 
   /** Returns the Skylark callable Method of objClass with structField=true and the given name. */
   public static MethodDescriptor getStructField(
-      SkylarkSemantics semantics, Class<?> objClass, String methodName) {
+      StarlarkSemantics semantics, Class<?> objClass, String methodName) {
     try {
       return fieldCache
           .get(new MethodDescriptorKey(getClassOrProxyClass(objClass), semantics))
@@ -333,15 +333,15 @@ public final class FuncallExpression extends Expression {
   /**
    * Returns the list of names of Skylark callable Methods of objClass with structField=true.
    *
-   * @deprecated use {@link #getStructFieldNames(SkylarkSemantics, Class)} instead
+   * @deprecated use {@link #getStructFieldNames(StarlarkSemantics, Class)} instead
    */
   @Deprecated
   public static Set<String> getStructFieldNames(Class<?> objClass) {
-    return getStructFieldNames(SkylarkSemantics.DEFAULT_SEMANTICS, objClass);
+    return getStructFieldNames(StarlarkSemantics.DEFAULT_SEMANTICS, objClass);
   }
 
   /** Returns the list of names of Skylark callable Methods of objClass with structField=true. */
-  public static Set<String> getStructFieldNames(SkylarkSemantics semantics, Class<?> objClass) {
+  public static Set<String> getStructFieldNames(StarlarkSemantics semantics, Class<?> objClass) {
     try {
       return fieldCache
           .get(new MethodDescriptorKey(getClassOrProxyClass(objClass), semantics))
@@ -354,16 +354,16 @@ public final class FuncallExpression extends Expression {
   /**
    * Returns the list of Skylark callable Methods of objClass with the given name.
    *
-   * @deprecated use {@link #getMethods(SkylarkSemantics, Class, String)} instead
+   * @deprecated use {@link #getMethods(StarlarkSemantics, Class, String)} instead
    */
   @Deprecated
   public static MethodDescriptor getMethod(Class<?> objClass, String methodName) {
-    return getMethod(SkylarkSemantics.DEFAULT_SEMANTICS, objClass, methodName);
+    return getMethod(StarlarkSemantics.DEFAULT_SEMANTICS, objClass, methodName);
   }
 
   /** Returns the list of Skylark callable Methods of objClass with the given name. */
   public static MethodDescriptor getMethod(
-      SkylarkSemantics semantics, Class<?> objClass, String methodName) {
+      StarlarkSemantics semantics, Class<?> objClass, String methodName) {
     try {
       return methodCache
           .get(new MethodDescriptorKey(getClassOrProxyClass(objClass), semantics))
@@ -377,18 +377,18 @@ public final class FuncallExpression extends Expression {
    * Returns a set of the Skylark name of all Skylark callable methods for object of type {@code
    * objClass}.
    *
-   * @deprecated use {@link #getMethodNames(SkylarkSemantics, Class)} instead
+   * @deprecated use {@link #getMethodNames(StarlarkSemantics, Class)} instead
    */
   @Deprecated
   public static Set<String> getMethodNames(Class<?> objClass) {
-    return getMethodNames(SkylarkSemantics.DEFAULT_SEMANTICS, objClass);
+    return getMethodNames(StarlarkSemantics.DEFAULT_SEMANTICS, objClass);
   }
 
   /**
    * Returns a set of the Skylark name of all Skylark callable methods for object of type {@code
    * objClass}.
    */
-  public static Set<String> getMethodNames(SkylarkSemantics semantics, Class<?> objClass) {
+  public static Set<String> getMethodNames(StarlarkSemantics semantics, Class<?> objClass) {
     try {
       return methodCache
           .get(new MethodDescriptorKey(getClassOrProxyClass(objClass), semantics))
@@ -402,7 +402,7 @@ public final class FuncallExpression extends Expression {
    * Returns true if the given class has a method annotated with {@link SkylarkCallable} with {@link
    * SkylarkCallable#selfCall()} set to true.
    */
-  public static boolean hasSelfCallMethod(SkylarkSemantics semantics, Class<?> objClass) {
+  public static boolean hasSelfCallMethod(StarlarkSemantics semantics, Class<?> objClass) {
     try {
       return selfCallCache.get(new MethodDescriptorKey(objClass, semantics)).isPresent();
     } catch (ExecutionException e) {
@@ -418,7 +418,7 @@ public final class FuncallExpression extends Expression {
    * @throws IllegalStateException if no such method exists for the object
    */
   public static MethodDescriptor getSelfCallMethodDescriptor(
-      SkylarkSemantics semantics, Object obj) {
+      StarlarkSemantics semantics, Object obj) {
     try {
       Optional<MethodDescriptor> selfCallDescriptor =
           selfCallCache.get(new MethodDescriptorKey(obj.getClass(), semantics));
@@ -530,12 +530,14 @@ public final class FuncallExpression extends Expression {
           throw argumentMismatchException(
               String.format(
                   "expected value of type '%s' for parameter '%s'", type, param.getName()),
-              method, objClass, args, kwargs);
+              method,
+              objClass);
         }
         if (param.isNamed() && keys.contains(param.getName())) {
           throw argumentMismatchException(
               String.format("got multiple values for keyword argument '%s'", param.getName()),
-              method, objClass, args, kwargs);
+              method,
+              objClass);
         }
         argIndex++;
       } else { // No more positional arguments, or no more positional parameters.
@@ -546,13 +548,12 @@ public final class FuncallExpression extends Expression {
             throw argumentMismatchException(
                 String.format(
                     "expected value of type '%s' for parameter '%s'", type, param.getName()),
-                method, objClass, args, kwargs);
+                method,
+                objClass);
           }
         } else { // Param not specified by user. Use default value.
           if (param.getDefaultValue().isEmpty()) {
-            throw argumentMismatchException(
-                String.format("parameter '%s' has no default value", param.getName()),
-                method, objClass, args, kwargs);
+            throw unspecifiedParameterException(param, method, objClass, kwargs);
           }
           value =
               SkylarkSignatureProcessor.getDefaultValue(
@@ -561,8 +562,7 @@ public final class FuncallExpression extends Expression {
       }
       if (!param.isNoneable() && value instanceof NoneType) {
         throw argumentMismatchException(
-            String.format("parameter '%s' cannot be None", param.getName()),
-            method, objClass, args, kwargs);
+            String.format("parameter '%s' cannot be None", param.getName()), method, objClass);
       }
       builder.add(value);
     }
@@ -579,9 +579,9 @@ public final class FuncallExpression extends Expression {
       } else {
         throw argumentMismatchException(
             String.format(
-                "expected no more than %s positional arguments, but got %s",
-                argIndex, args.size()),
-            method, objClass, args, kwargs);
+                "expected no more than %s positional arguments, but got %s", argIndex, args.size()),
+            method,
+            objClass);
       }
     }
     ImmutableMap<String, Object> extraKwargs = ImmutableMap.of();
@@ -594,7 +594,7 @@ public final class FuncallExpression extends Expression {
         }
         extraKwargs = extraKwargsBuilder.build();
       } else {
-        throw unexpectedKeywordArgumentException(keys, method, objClass, args, kwargs, environment);
+        throw unexpectedKeywordArgumentException(keys, method, objClass, environment);
       }
     }
 
@@ -610,12 +610,26 @@ public final class FuncallExpression extends Expression {
     return builder.build().toArray();
   }
 
+  private EvalException unspecifiedParameterException(
+      ParamDescriptor param,
+      MethodDescriptor method,
+      Class<?> objClass,
+      Map<String, Object> kwargs) {
+    if (kwargs.containsKey(param.getName())) {
+      return argumentMismatchException(
+          String.format("parameter '%s' may not be specified by name", param.getName()),
+          method,
+          objClass);
+    } else {
+      return argumentMismatchException(
+          String.format("parameter '%s' has no default value", param.getName()), method, objClass);
+    }
+  }
+
   private EvalException unexpectedKeywordArgumentException(
       Set<String> unexpectedKeywords,
       MethodDescriptor method,
       Class<?> objClass,
-      List<Object> args,
-      Map<String, Object> kwargs,
       Environment env) {
     // Check if any of the unexpected keywords are for parameters which are disabled by the
     // current semantic flags. Throwing an error with information about the misconfigured
@@ -648,40 +662,34 @@ public final class FuncallExpression extends Expression {
             unexpectedKeywords.size() > 1 ? "s" : "",
             Joiner.on(",").join(Iterables.transform(unexpectedKeywords, s -> "'" + s + "'"))),
         method,
-        objClass,
-        args,
-        kwargs);
+        objClass);
   }
 
-  private EvalException argumentMismatchException(String errorDescription,
-      MethodDescriptor methodDescriptor, Class<?> objClass, List<Object> args,
-      Map<String, Object> kwargs) {
+  private EvalException argumentMismatchException(
+      String errorDescription, MethodDescriptor methodDescriptor, Class<?> objClass) {
     if (methodDescriptor.isSelfCall() || SkylarkInterfaceUtils.hasSkylarkGlobalLibrary(objClass)) {
       return new EvalException(
           getLocation(),
           String.format(
-              "%s, in call to %s",
-              errorDescription,
-              formatMethod(objClass, methodDescriptor.getName(), args, kwargs)));
+              "%s, for call to function %s",
+              errorDescription, formatMethod(objClass, methodDescriptor)));
     } else {
       return new EvalException(
           getLocation(),
           String.format(
-              "%s, in method call %s of '%s'",
+              "%s, for call to method %s of '%s'",
               errorDescription,
-              formatMethod(objClass, methodDescriptor.getName(), args, kwargs),
+              formatMethod(objClass, methodDescriptor),
               EvalUtils.getDataTypeNameFromClass(objClass)));
     }
   }
 
-  private EvalException missingMethodException(
-      Class<?> objClass, String methodName, List<Object> args, Map<String, Object> kwargs) {
+  private EvalException missingMethodException(Class<?> objClass, String methodName) {
     return new EvalException(
         getLocation(),
         String.format(
-            "type '%s' has no method %s",
-            EvalUtils.getDataTypeNameFromClass(objClass),
-            formatMethod(objClass, methodName, args, kwargs)));
+            "type '%s' has no method %s()",
+            EvalUtils.getDataTypeNameFromClass(objClass), methodName));
   }
 
   /**
@@ -731,33 +739,30 @@ public final class FuncallExpression extends Expression {
     }
   }
 
-  private static String formatMethod(
-      Class<?> objClass, String name, List<Object> args, Map<String, Object> kwargs) {
-    if (objClass == StringModule.class) {
-      // StringModule is a special case, and begins with a String "self" parameter which should
-      // be omitted from the method format.
-      args = args.subList(1, args.size());
-    }
-    StringBuilder sb = new StringBuilder();
-    sb.append(name).append("(");
-    boolean first = true;
-    for (Object obj : args) {
-      if (!first) {
-        sb.append(", ");
+  private static String formatMethod(Class<?> objClass, MethodDescriptor methodDescriptor) {
+    ImmutableList.Builder<String> argTokens = ImmutableList.builder();
+    // Skip first parameter ('self') for StringModule, as its a special case.
+    Iterable<ParamDescriptor> parameters =
+        objClass == StringModule.class
+            ? Iterables.skip(methodDescriptor.getParameters(), 1)
+            : methodDescriptor.getParameters();
+
+    for (ParamDescriptor paramDescriptor : parameters) {
+      if (!paramDescriptor.isDisabledInCurrentSemantics()) {
+        if (paramDescriptor.getDefaultValue().isEmpty()) {
+          argTokens.add(paramDescriptor.getName());
+        } else {
+          argTokens.add(paramDescriptor.getName() + " = " + paramDescriptor.getDefaultValue());
+        }
       }
-      sb.append(EvalUtils.getDataTypeName(obj));
-      first = false;
     }
-    for (Map.Entry<String, Object> kwarg : kwargs.entrySet()) {
-      if (!first) {
-        sb.append(", ");
-      }
-      sb.append(EvalUtils.getDataTypeName(kwarg.getValue()));
-      sb.append(" ");
-      sb.append(kwarg.getKey());
-      first = false;
+    if (methodDescriptor.isAcceptsExtraArgs()) {
+      argTokens.add("*args");
     }
-    return sb.append(")").toString();
+    if (methodDescriptor.isAcceptsExtraKwargs()) {
+      argTokens.add("**kwargs");
+    }
+    return methodDescriptor.getName() + "(" + Joiner.on(", ").join(argTokens.build()) + ")";
   }
 
   /**
@@ -937,7 +942,7 @@ public final class FuncallExpression extends Expression {
     // as a callable.
     Object functionObject = DotExpression.eval(objValue, methodName, dot.getLocation(), env);
     if (functionObject == null) {
-      throw missingMethodException(objValue.getClass(), methodName, posargs, kwargs);
+      throw missingMethodException(objValue.getClass(), methodName);
     } else {
       return callFunction(functionObject, posargs, kwargs, env);
     }
@@ -961,7 +966,7 @@ public final class FuncallExpression extends Expression {
 
     MethodDescriptor method = getMethod(env.getSemantics(), StringModule.class, methodName);
     if (method == null) {
-      throw missingMethodException(StringModule.class, methodName, posargs, kwargs);
+      throw missingMethodException(StringModule.class, methodName);
     }
 
     Object[] javaArguments = convertStarlarkArgumentsToJavaMethodArguments(

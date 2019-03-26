@@ -122,6 +122,7 @@ public class AarImportTest extends BuildViewTestCase {
         "    jars = ['baz.jar'],",
         "    constraints = ['android'],",
         ")");
+    getAnalysisMock().ccSupport().setupCcToolchainConfigForCpu(mockToolsConfig, "armeabi-v7a");
   }
 
   @Test

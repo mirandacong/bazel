@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.InconsistentFilesystemException;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -22,7 +23,7 @@ import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.Runtime;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -102,8 +103,8 @@ public class ASTFileLookupFunction implements SkyFunction {
     if (!fileValue.isFile()) {
       return ASTFileLookupValue.forBadFile(fileLabel);
     }
-    SkylarkSemantics skylarkSemantics = PrecomputedValue.SKYLARK_SEMANTICS.get(env);
-    if (skylarkSemantics == null) {
+    StarlarkSemantics starlarkSemantics = PrecomputedValue.STARLARK_SEMANTICS.get(env);
+    if (starlarkSemantics == null) {
       return null;
     }
 
@@ -118,11 +119,12 @@ public class ASTFileLookupFunction implements SkyFunction {
                 .createSkylarkRuleClassEnvironment(
                     fileLabel,
                     mutability,
-                    skylarkSemantics,
+                    starlarkSemantics,
                     env.getListener(),
-                    // the two below don't matter for extracting the ValidationEnvironment:
+                    // the three below don't matter for extracting the ValidationEnvironment:
                     /*astFileContentHashCode=*/ null,
-                    /*importMap=*/ null)
+                    /*importMap=*/ null,
+                    /*repoMapping=*/ ImmutableMap.of())
                 .setupDynamic(Runtime.PKG_NAME, Runtime.NONE)
                 .setupDynamic(Runtime.REPOSITORY_NAME, Runtime.NONE);
         byte[] bytes = FileSystemUtils.readWithKnownFileSize(path, astFileSize);

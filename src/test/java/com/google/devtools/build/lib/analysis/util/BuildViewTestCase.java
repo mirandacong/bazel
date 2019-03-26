@@ -91,11 +91,13 @@ import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition
 import com.google.devtools.build.lib.analysis.configuredtargets.FileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.analysis.extra.ExtraAction;
+import com.google.devtools.build.lib.analysis.skylark.StarlarkTransition.TransitionException;
 import com.google.devtools.build.lib.analysis.test.BaselineCoverageAction;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -121,7 +123,7 @@ import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.EnvironmentExtension;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.SkylarkSemanticsOptions;
+import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.util.MockToolsConfig;
 import com.google.devtools.build.lib.pkgcache.LoadingOptions;
@@ -141,7 +143,7 @@ import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.SkyValueDirtinessChecker;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.TargetPatternPhaseValue;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -155,7 +157,6 @@ import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.common.options.InvocationPolicyEnforcer;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
@@ -200,7 +201,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
 
   protected OptionsParser optionsParser;
   private PackageCacheOptions packageCacheOptions;
-  private SkylarkSemanticsOptions skylarkSemanticsOptions;
+  private StarlarkSemanticsOptions starlarkSemanticsOptions;
   protected PackageFactory pkgFactory;
 
   protected MockToolsConfig mockToolsConfig;
@@ -241,9 +242,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     initializeMockClient();
 
     packageCacheOptions = parsePackageCacheOptions();
-    skylarkSemanticsOptions = parseSkylarkSemanticsOptions();
-    workspaceStatusActionFactory =
-        new AnalysisTestUtil.DummyWorkspaceStatusActionFactory(directories);
+    starlarkSemanticsOptions = parseSkylarkSemanticsOptions();
+    workspaceStatusActionFactory = new AnalysisTestUtil.DummyWorkspaceStatusActionFactory();
     mutableActionGraph = new MapBasedActionGraph(actionKeyContext);
     ruleClassProvider = getRuleClassProvider();
 
@@ -266,7 +266,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     if (!doPackageLoadingChecks) {
       pkgFactoryBuilder.disableChecks();
     }
-    pkgFactory = pkgFactoryBuilder.build(ruleClassProvider);
+    pkgFactory = pkgFactoryBuilder.build(ruleClassProvider, fileSystem);
     tsgm = new TimestampGranularityMonitor(BlazeClock.instance());
     skyframeExecutor =
         SequencedSkyframeExecutor.create(
@@ -296,8 +296,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
             ImmutableList.of(root),
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY),
         packageCacheOptions,
-        skylarkSemanticsOptions,
-        "",
+        starlarkSemanticsOptions,
         UUID.randomUUID(),
         ImmutableMap.<String, String>of(),
         tsgm);
@@ -333,8 +332,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return ImmutableList.<EnvironmentExtension>of();
   }
 
-  protected SkylarkSemantics getSkylarkSemantics() {
-    return skylarkSemanticsOptions.toSkylarkSemantics();
+  protected StarlarkSemantics getSkylarkSemantics() {
+    return starlarkSemanticsOptions.toSkylarkSemantics();
   }
 
   protected ResourceSet getStartingResources() {
@@ -354,6 +353,10 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     allArgs.add("--stamp");  // Stamp is now defaulted to false.
     allArgs.add("--experimental_extended_sanity_checks");
     allArgs.add("--features=cc_include_scanning");
+    // Always default to k8, even on mac and windows. Tests that need different cpu should set it
+    // using {@link useConfiguration()} explicitly.
+    allArgs.add("--cpu=k8");
+    allArgs.add("--host_cpu=k8");
 
     optionsParser.parse(allArgs);
     optionsParser.parse(args);
@@ -361,14 +364,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     // TODO(juliexxia): when the starlark options parsing work goes in, add type verification here.
     optionsParser.setStarlarkOptions(skylarkOptions);
 
-    InvocationPolicyEnforcer optionsPolicyEnforcer =
-        getAnalysisMock().getInvocationPolicyEnforcer();
-    optionsPolicyEnforcer.enforce(optionsParser);
-
     BuildOptions buildOptions = ruleClassProvider.createBuildOptions(optionsParser);
-    skyframeExecutor.resetConfigurationCollectionForTesting();
-    skyframeExecutor.setConfigurationFragmentFactories(
-        ruleClassProvider.getConfigurationFragments());
     return skyframeExecutor.createConfigurations(
         reporter, buildOptions, ImmutableSet.<String>of(), false);
   }
@@ -417,8 +413,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     skyframeExecutor.preparePackageLoading(
         pkgLocator,
         packageCacheOptions,
-        skylarkSemanticsOptions,
-        ruleClassProvider.getDefaultsPackageContent(optionsParser),
+        starlarkSemanticsOptions,
         UUID.randomUUID(),
         ImmutableMap.<String, String>of(),
         tsgm);
@@ -443,7 +438,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   }
 
   protected void setSkylarkSemanticsOptions(String... options) throws Exception {
-    skylarkSemanticsOptions = parseSkylarkSemanticsOptions(options);
+    starlarkSemanticsOptions = parseSkylarkSemanticsOptions(options);
     setUpSkyframe();
   }
 
@@ -454,11 +449,11 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return parser.getOptions(PackageCacheOptions.class);
   }
 
-  private static SkylarkSemanticsOptions parseSkylarkSemanticsOptions(String... options)
+  private static StarlarkSemanticsOptions parseSkylarkSemanticsOptions(String... options)
       throws Exception {
-    OptionsParser parser = OptionsParser.newOptionsParser(SkylarkSemanticsOptions.class);
+    OptionsParser parser = OptionsParser.newOptionsParser(StarlarkSemanticsOptions.class);
     parser.parse(options);
-    return parser.getOptions(SkylarkSemanticsOptions.class);
+    return parser.getOptions(StarlarkSemanticsOptions.class);
   }
 
   /** Used by skyframe-only tests. */
@@ -518,14 +513,17 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
    */
   protected void useConfiguration(ImmutableMap<String, Object> skylarkOptions, String... args)
       throws Exception {
-    String[] actualArgs;
-    actualArgs = Arrays.copyOf(args, args.length + 1);
-    actualArgs[args.length] =
-        "--experimental_dynamic_configs=" + Ascii.toLowerCase(configsMode.toString());
-    masterConfig = createConfigurations(skylarkOptions, actualArgs);
+    ImmutableList<String> actualArgs =
+        ImmutableList.<String>builder()
+            .addAll(TestConstants.PRODUCT_SPECIFIC_FLAGS)
+            .add(args)
+            .add("--experimental_dynamic_configs=" + Ascii.toLowerCase(configsMode.toString()))
+            .build();
+
+    masterConfig = createConfigurations(skylarkOptions, actualArgs.toArray(new String[0]));
     targetConfig = getTargetConfiguration();
     targetConfigKey = BuildConfigurationValue.key(targetConfig);
-    configurationArgs = Arrays.asList(actualArgs);
+    configurationArgs = actualArgs;
     createBuildView();
   }
 
@@ -554,9 +552,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         + "and does not match target configuration %s",
         getHostConfiguration(), getTargetConfiguration());
 
-    String defaultsPackageContent = ruleClassProvider.getDefaultsPackageContent(optionsParser);
-    skyframeExecutor.setupDefaultPackage(defaultsPackageContent);
-    skyframeExecutor.handleConfiguredTargetChange();
+    skyframeExecutor.handleAnalysisInvalidatingChange();
 
     view = new BuildViewForTesting(directories, ruleClassProvider, skyframeExecutor, null);
     view.setConfigurationsForTesting(event -> {}, masterConfig);
@@ -569,8 +565,9 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
         view.getArtifactFactory(),
         actionKeyContext,
         ArtifactOwner.NullArtifactOwner.INSTANCE,
-        /*isSystemEnv=*/ true, /*extendedSanityChecks*/
-        false,
+        /*isSystemEnv=*/ true,
+        /*extendedSanityChecks=*/ false,
+        /*allowAnalysisFailures=*/ false,
         reporter,
         /* env= */ null);
   }
@@ -860,7 +857,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
    * that transition is applied to the given config in the returned ConfiguredTarget.
    */
   public ConfiguredTarget getConfiguredTarget(String label)
-      throws LabelSyntaxException {
+      throws LabelSyntaxException, TransitionException {
     return getConfiguredTarget(label, targetConfig);
   }
 
@@ -870,7 +867,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
    * applied to the given config in the returned ConfiguredTarget.
    */
   protected ConfiguredTarget getConfiguredTarget(String label, BuildConfiguration config)
-      throws LabelSyntaxException {
+      throws LabelSyntaxException, TransitionException {
     return getConfiguredTarget(Label.parseAbsolute(label, ImmutableMap.of()), config);
   }
 
@@ -884,7 +881,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
    * evaluation, which is produced by the {@link MemoizingEvaluator#getExistingValue} call in {@link
    * SkyframeExecutor#getConfiguredTargetForTesting}. See also b/26382502.
    */
-  protected ConfiguredTarget getConfiguredTarget(Label label, BuildConfiguration config) {
+  protected ConfiguredTarget getConfiguredTarget(Label label, BuildConfiguration config)
+      throws TransitionException {
     return view.getConfiguredTargetForTesting(reporter, BlazeTestUtils.convertLabel(label), config);
   }
 
@@ -892,7 +890,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
    * Returns a ConfiguredTargetAndData for the specified label, using the given build configuration.
    */
   protected ConfiguredTargetAndData getConfiguredTargetAndData(
-      Label label, BuildConfiguration config) {
+      Label label, BuildConfiguration config) throws TransitionException {
     return view.getConfiguredTargetAndDataForTesting(reporter, label, config);
   }
 
@@ -900,36 +898,38 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
    * Returns the ConfiguredTargetAndData for the specified label. If the label corresponds to a
    * target with a top-level configuration transition, that transition is applied to the given
    * config in the ConfiguredTargetAndData's ConfiguredTarget.
+   *
+   * @throws TransitionException if there was a problem resolving Starlark-defined configuration
+   *     transitions.
    */
   public ConfiguredTargetAndData getConfiguredTargetAndData(String label)
-      throws LabelSyntaxException {
+      throws LabelSyntaxException, TransitionException {
     return getConfiguredTargetAndData(Label.parseAbsolute(label, ImmutableMap.of()), targetConfig);
   }
 
   /**
-   * Returns the ConfiguredTarget for the specified file label, configured for
-   * the "build" (aka "target") configuration.
+   * Returns the ConfiguredTarget for the specified file label, configured for the "build" (aka
+   * "target") configuration.
    */
   protected FileConfiguredTarget getFileConfiguredTarget(String label)
-      throws LabelSyntaxException {
+      throws LabelSyntaxException, TransitionException {
     return (FileConfiguredTarget) getConfiguredTarget(label, targetConfig);
   }
 
   /**
-   * Returns the ConfiguredTarget for the specified label, configured for
-   * the "host" configuration.
+   * Returns the ConfiguredTarget for the specified label, configured for the "host" configuration.
    */
   protected ConfiguredTarget getHostConfiguredTarget(String label)
-      throws LabelSyntaxException {
+      throws LabelSyntaxException, TransitionException {
     return getConfiguredTarget(label, getHostConfiguration());
   }
 
   /**
-   * Returns the ConfiguredTarget for the specified file label, configured for
-   * the "host" configuration.
+   * Returns the ConfiguredTarget for the specified file label, configured for the "host"
+   * configuration.
    */
   protected FileConfiguredTarget getHostFileConfiguredTarget(String label)
-      throws LabelSyntaxException {
+      throws LabelSyntaxException, TransitionException {
     return (FileConfiguredTarget) getHostConfiguredTarget(label);
   }
 
@@ -1028,7 +1028,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
   protected Rule scratchRule(String packageName, String ruleName, String... lines)
       throws Exception {
     String buildFilePathString = packageName + "/BUILD";
-    if (packageName.equals(Label.EXTERNAL_PACKAGE_NAME.getPathString())) {
+    if (packageName.equals(LabelConstants.EXTERNAL_PACKAGE_NAME.getPathString())) {
       buildFilePathString = "WORKSPACE";
       scratch.overwriteFile(buildFilePathString, lines);
     } else {
@@ -1062,6 +1062,26 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     if (target != null) {
       assertWithMessage(
               "Rule '" + "//" + packageName + ":" + ruleName + "' did not contain an error")
+          .that(view.hasErrors(target))
+          .isTrue();
+    }
+    return assertContainsEvent(expectedErrorMessage);
+  }
+
+  /**
+   * Check that configuration of the target named 'label' fails with an error message containing
+   * 'expectedErrorMessage'.
+   *
+   * @param label the target name to test
+   * @param expectedErrorMessage the expected error message.
+   * @return the found error.
+   */
+  protected Event checkError(String label, String expectedErrorMessage) throws Exception {
+    eventCollector.clear();
+    reporter.removeHandler(failFastHandler); // expect errors
+    ConfiguredTarget target = getConfiguredTarget(label);
+    if (target != null) {
+      assertWithMessage("Rule '" + label + "' did not contain an error")
           .that(view.hasErrors(target))
           .isTrue();
     }
@@ -1739,10 +1759,8 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return skyframeExecutor.getConfiguration(reporter, ct.getConfigurationKey());
   }
 
-  /**
-   * Returns an attribute value retriever for the given rule for the target configuration.
-   */
-  protected AttributeMap attributes(RuleConfiguredTarget ct) {
+  /** Returns an attribute value retriever for the given rule for the target configuration. */
+  protected AttributeMap attributes(RuleConfiguredTarget ct) throws TransitionException {
     ConfiguredTargetAndData ctad;
     try {
       ctad = getConfiguredTargetAndData(ct.getLabel().toString());
@@ -1752,7 +1770,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     return getMapperFromConfiguredTargetAndTarget(ctad);
   }
 
-  protected AttributeMap attributes(ConfiguredTarget rule) {
+  protected AttributeMap attributes(ConfiguredTarget rule) throws TransitionException {
     return attributes((RuleConfiguredTarget) rule);
   }
 
@@ -1964,7 +1982,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
     }
 
     @Override
-    public SkylarkSemantics getSkylarkSemantics() {
+    public StarlarkSemantics getSkylarkSemantics() {
       throw new UnsupportedOperationException();
     }
 
@@ -2208,6 +2226,7 @@ public abstract class BuildViewTestCase extends FoundationTestCase {
           actionKeyContext,
           /*metadataHandler=*/ null,
           actionLogBufferPathGenerator.generate(ArtifactPathResolver.IDENTITY),
+          reporter,
           clientEnv,
           ImmutableMap.of(),
           artifactExpander,

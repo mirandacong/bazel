@@ -14,15 +14,15 @@
 
 package com.google.devtools.build.lib.bazel.repository;
 
+import static com.google.devtools.build.lib.bazel.repository.StripPrefixedPath.maybeDeprefixSymlink;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.bazel.repository.DecompressorValue.Decompressor;
-import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.zip.ZipFileEntry;
 import com.google.devtools.build.zip.ZipReader;
 import java.io.File;
@@ -33,8 +33,9 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
-
+import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
@@ -57,8 +58,9 @@ public class ZipDecompressor implements Decompressor {
   static final int WINDOWS_FILE = 0x20;
 
   /**
-   * This unzips the zip file to a sibling directory of {@link DecompressorDescriptor#archivePath}.
-   * The zip file is expected to have the WORKSPACE file at the top level, e.g.:
+   * This unzips the zip file to directory {@link DecompressorDescriptor#repositoryPath()}, which by
+   * default is empty relative [to the calling external repository rule] path. The zip file is
+   * expected to have the WORKSPACE file at the top level, e.g.:
    *
    * <pre>
    * $ unzip -lf some-repo.zip
@@ -73,36 +75,42 @@ public class ZipDecompressor implements Decompressor {
    */
   @Override
   @Nullable
-  public Path decompress(DecompressorDescriptor descriptor) throws RepositoryFunctionException {
-    Path destinationDirectory = descriptor.archivePath().getParentDirectory();
+  public Path decompress(DecompressorDescriptor descriptor) throws IOException {
+    Path destinationDirectory = descriptor.repositoryPath();
     Optional<String> prefix = descriptor.prefix();
     boolean foundPrefix = false;
+    // Store link, target info of symlinks, we create them after regular files are extracted.
+    Map<Path, PathFragment> symlinks = new HashMap<>();
+
     try (ZipReader reader = new ZipReader(descriptor.archivePath().getPathFile())) {
       Collection<ZipFileEntry> entries = reader.entries();
-      // Store link, target info of symlinks, we create them after regular files are extracted.
-      Map<Path, PathFragment> symlinks = new HashMap<>();
       for (ZipFileEntry entry : entries) {
         StripPrefixedPath entryPath = StripPrefixedPath.maybeDeprefix(entry.getName(), prefix);
         foundPrefix = foundPrefix || entryPath.foundPrefix();
         if (entryPath.skip()) {
           continue;
         }
-        extractZipEntry(reader, entry, destinationDirectory, entryPath.getPathFragment(), symlinks);
+        extractZipEntry(
+            reader, entry, destinationDirectory, entryPath.getPathFragment(), prefix, symlinks);
       }
-      for (Map.Entry<Path, PathFragment> symlink : symlinks.entrySet()) {
-        symlink.getKey().createSymbolicLink(symlink.getValue());
+
+      if (prefix.isPresent() && !foundPrefix) {
+        Set<String> prefixes = new HashSet<>();
+        for (ZipFileEntry entry : entries) {
+          StripPrefixedPath entryPath =
+              StripPrefixedPath.maybeDeprefix(entry.getName(), Optional.absent());
+          Optional<String> suggestion =
+              CouldNotFindPrefixException.maybeMakePrefixSuggestion(entryPath.getPathFragment());
+          if (suggestion.isPresent()) {
+            prefixes.add(suggestion.get());
+          }
+        }
+        throw new CouldNotFindPrefixException(prefix.get(), prefixes);
       }
-    } catch (IOException e) {
-      throw new RepositoryFunctionException(new IOException(
-          String.format("Error extracting %s to %s: %s",
-              descriptor.archivePath(), destinationDirectory, e.getMessage())),
-          Transience.TRANSIENT);
     }
 
-    if (prefix.isPresent() && !foundPrefix) {
-      throw new RepositoryFunctionException(
-          new IOException("Prefix " + prefix.get() + " was given, but not found in the zip"),
-          Transience.PERSISTENT);
+    for (Map.Entry<Path, PathFragment> symlink : symlinks.entrySet()) {
+      FileSystemUtils.ensureSymbolicLink(symlink.getKey(), symlink.getValue());
     }
 
     return destinationDirectory;
@@ -113,6 +121,7 @@ public class ZipDecompressor implements Decompressor {
       ZipFileEntry entry,
       Path destinationDirectory,
       PathFragment strippedRelativePath,
+      Optional<String> prefix,
       Map<Path, PathFragment> symlinks)
       throws IOException {
     if (strippedRelativePath.isAbsolute()) {
@@ -142,10 +151,7 @@ public class ZipDecompressor implements Decompressor {
               + target);
         }
       }
-      if (target.isAbsolute()) {
-        target = target.relativeTo("/");
-        target = destinationDirectory.getRelative(target).asFragment();
-      }
+      target = maybeDeprefixSymlink(target, prefix, destinationDirectory);
       symlinks.put(outputPath, target);
     } else {
       // TODO(kchodorow): should be able to be removed when issue #236 is resolved, but for now

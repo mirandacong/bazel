@@ -41,9 +41,9 @@ import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.EnvironmentExtension;
+import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.skyframe.ASTFileLookupFunction;
-import com.google.devtools.build.lib.skyframe.BazelSkyframeExecutorConstants;
 import com.google.devtools.build.lib.skyframe.BlacklistedPackagePrefixesFunction;
 import com.google.devtools.build.lib.skyframe.ContainingPackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.ExternalFilesHelper;
@@ -69,7 +69,7 @@ import com.google.devtools.build.lib.skyframe.SkylarkImportLookupFunction;
 import com.google.devtools.build.lib.skyframe.WorkspaceASTFunction;
 import com.google.devtools.build.lib.skyframe.WorkspaceFileFunction;
 import com.google.devtools.build.lib.skyframe.WorkspaceNameFunction;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -123,7 +123,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
   private final Reporter reporter;
   protected final ConfiguredRuleClassProvider ruleClassProvider;
   private final PackageFactory pkgFactory;
-  protected SkylarkSemantics skylarkSemantics;
+  protected StarlarkSemantics starlarkSemantics;
   protected final ImmutableMap<SkyFunctionName, SkyFunction> extraSkyFunctions;
   private final AtomicReference<PathPackageLocator> pkgLocatorRef;
   protected final ExternalFilesHelper externalFilesHelper;
@@ -137,17 +137,22 @@ public abstract class AbstractPackageLoader implements PackageLoader {
     protected final BlazeDirectories directories;
     protected final PathPackageLocator pkgLocator;
     final AtomicReference<PathPackageLocator> pkgLocatorRef;
-    protected final ExternalFilesHelper externalFilesHelper;
+    private ExternalFileAction externalFileAction;
+    protected ExternalFilesHelper externalFilesHelper;
     protected ConfiguredRuleClassProvider ruleClassProvider = getDefaultRuleClassProvider();
-    protected SkylarkSemantics skylarkSemantics;
+    protected StarlarkSemantics starlarkSemantics;
     protected Reporter reporter = new Reporter(new EventBus());
     protected Map<SkyFunctionName, SkyFunction> extraSkyFunctions = new HashMap<>();
     List<PrecomputedValue.Injected> extraPrecomputedValues = new ArrayList<>();
-    String defaultsPackageContents = getDefaultDefaultPackageContents();
     int legacyGlobbingThreads = 1;
     int skyframeThreads = 1;
 
-    protected Builder(Root workspaceDir, Path installBase, Path outputBase) {
+    protected Builder(
+        Root workspaceDir,
+        Path installBase,
+        Path outputBase,
+        ImmutableList<BuildFileName> buildFilesByPriority,
+        ExternalFileAction externalFileAction) {
       this.workspaceDir = workspaceDir.asPath();
       Path devNull = workspaceDir.getRelative("/dev/null");
       directories =
@@ -159,15 +164,9 @@ public abstract class AbstractPackageLoader implements PackageLoader {
 
       this.pkgLocator =
           new PathPackageLocator(
-              directories.getOutputBase(),
-              ImmutableList.of(workspaceDir),
-              BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY);
+              directories.getOutputBase(), ImmutableList.of(workspaceDir), buildFilesByPriority);
       this.pkgLocatorRef = new AtomicReference<>(pkgLocator);
-      this.externalFilesHelper =
-          ExternalFilesHelper.create(
-              pkgLocatorRef,
-              ExternalFileAction.DEPEND_ON_EXTERNAL_PKG_FOR_EXTERNAL_REPO_PATHS,
-              directories);
+      this.externalFileAction = externalFileAction;
     }
 
     public Builder setRuleClassProvider(ConfiguredRuleClassProvider ruleClassProvider) {
@@ -175,13 +174,13 @@ public abstract class AbstractPackageLoader implements PackageLoader {
       return this;
     }
 
-    public Builder setSkylarkSemantics(SkylarkSemantics semantics) {
-      this.skylarkSemantics = semantics;
+    public Builder setSkylarkSemantics(StarlarkSemantics semantics) {
+      this.starlarkSemantics = semantics;
       return this;
     }
 
     public Builder useDefaultSkylarkSemantics() {
-      this.skylarkSemantics = SkylarkSemantics.DEFAULT_SEMANTICS;
+      this.starlarkSemantics = StarlarkSemantics.DEFAULT_SEMANTICS;
       return this;
     }
 
@@ -216,9 +215,14 @@ public abstract class AbstractPackageLoader implements PackageLoader {
       return this;
     }
 
+    public Builder setExternalFileAction(ExternalFileAction externalFileAction) {
+      this.externalFileAction = externalFileAction;
+      return this;
+    }
+
     /** Throws {@link IllegalArgumentException} if builder args are incomplete/inconsistent. */
     protected void validate() {
-      if (skylarkSemantics == null) {
+      if (starlarkSemantics == null) {
         throw new IllegalArgumentException(
             "must call either setSkylarkSemantics or useDefaultSkylarkSemantics");
       }
@@ -226,19 +230,19 @@ public abstract class AbstractPackageLoader implements PackageLoader {
 
     public final PackageLoader build() {
       validate();
+      externalFilesHelper =
+          ExternalFilesHelper.create(pkgLocatorRef, externalFileAction, directories);
       return buildImpl();
     }
 
     protected abstract PackageLoader buildImpl();
 
     protected abstract ConfiguredRuleClassProvider getDefaultRuleClassProvider();
-
-    protected abstract String getDefaultDefaultPackageContents();
   }
 
   AbstractPackageLoader(Builder builder) {
     this.ruleClassProvider = builder.ruleClassProvider;
-    this.skylarkSemantics = builder.skylarkSemantics;
+    this.starlarkSemantics = builder.starlarkSemantics;
     this.reporter = builder.reporter;
     this.extraSkyFunctions = ImmutableMap.copyOf(builder.extraSkyFunctions);
     this.pkgLocatorRef = builder.pkgLocatorRef;
@@ -250,9 +254,8 @@ public abstract class AbstractPackageLoader implements PackageLoader {
 
     this.preinjectedDiff =
         makePreinjectedDiff(
-            skylarkSemantics,
+            starlarkSemantics,
             builder.pkgLocator,
-            builder.defaultsPackageContents,
             ImmutableList.copyOf(builder.extraPrecomputedValues));
     pkgFactory =
         new PackageFactory(
@@ -264,9 +267,8 @@ public abstract class AbstractPackageLoader implements PackageLoader {
   }
 
   private static ImmutableDiff makePreinjectedDiff(
-      SkylarkSemantics skylarkSemantics,
+      StarlarkSemantics starlarkSemantics,
       PathPackageLocator pkgLocator,
-      String defaultsPackageContents,
       ImmutableList<PrecomputedValue.Injected> extraPrecomputedValues) {
     final Map<SkyKey, SkyValue> valuesToInject = new HashMap<>();
     Injectable injectable =
@@ -286,9 +288,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
     }
     PrecomputedValue.PATH_PACKAGE_LOCATOR.set(injectable, pkgLocator);
     PrecomputedValue.DEFAULT_VISIBILITY.set(injectable, ConstantRuleVisibility.PRIVATE);
-    PrecomputedValue.SKYLARK_SEMANTICS.set(injectable, skylarkSemantics);
-    PrecomputedValue.DEFAULTS_PACKAGE_CONTENTS.set(injectable, defaultsPackageContents);
-    PrecomputedValue.ENABLE_DEFAULTS_PACKAGE.set(injectable, true);
+    PrecomputedValue.STARLARK_SEMANTICS.set(injectable, starlarkSemantics);
     return new ImmutableDiff(ImmutableList.of(), valuesToInject);
   }
 
@@ -427,8 +427,12 @@ public abstract class AbstractPackageLoader implements PackageLoader {
         .put(SkyFunctions.WORKSPACE_NAME, new WorkspaceNameFunction())
         .put(SkyFunctions.WORKSPACE_AST, new WorkspaceASTFunction(ruleClassProvider))
         .put(
-            SkyFunctions.WORKSPACE_FILE,
-            new WorkspaceFileFunction(ruleClassProvider, pkgFactory, directories))
+            WorkspaceFileValue.WORKSPACE_FILE,
+            new WorkspaceFileFunction(
+                ruleClassProvider,
+                pkgFactory,
+                directories,
+                /*skylarkImportLookupFunctionForInlining=*/ null))
         .put(SkyFunctions.EXTERNAL_PACKAGE, new ExternalPackageFunction())
         .put(SkyFunctions.REPOSITORY_MAPPING, new RepositoryMappingFunction())
         .put(

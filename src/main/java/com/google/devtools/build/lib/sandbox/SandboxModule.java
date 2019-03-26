@@ -26,7 +26,6 @@ import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.SpawnResult;
-import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildInterruptedEvent;
@@ -44,7 +43,6 @@ import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.FileSystem;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsBase;
@@ -105,7 +103,6 @@ public final class SandboxModule extends BlazeModule {
     env.getEventBus().register(this);
 
     // Don't attempt cleanup unless the executor is initialized.
-    sandboxfsProcess = null;
     shouldCleanupSandboxBase = false;
   }
 
@@ -125,22 +122,44 @@ public final class SandboxModule extends BlazeModule {
     SandboxOptions options = checkNotNull(env.getOptions().getOptions(SandboxOptions.class));
     sandboxBase = computeSandboxBase(options, env);
 
+    // Do not remove the sandbox base when --sandbox_debug was specified so that people can check
+    // out the contents of the generated sandbox directories.
+    shouldCleanupSandboxBase = !options.sandboxDebug;
+
+    Path mountPoint = sandboxBase.getRelative("sandboxfs");
+
     // Ensure that each build starts with a clean sandbox base directory. Otherwise using the `id`
     // that is provided by SpawnExecutionPolicy#getId to compute a base directory for a sandbox
     // might result in an already existing directory.
+    if (sandboxfsProcess != null) {
+      if (options.sandboxDebug) {
+        env.getReporter()
+            .handle(
+                Event.info(
+                    "Unmounting sandboxfs instance left behind on "
+                        + mountPoint
+                        + " by a previous command"));
+      }
+      sandboxfsProcess.destroy();
+      sandboxfsProcess = null;
+    }
     if (sandboxBase.exists()) {
-      FileSystemUtils.deleteTree(sandboxBase);
+      sandboxBase.deleteTree();
     }
 
     sandboxBase.createDirectoryAndParents();
     if (options.useSandboxfs) {
-      Path mountPoint = sandboxBase.getRelative("sandboxfs");
       mountPoint.createDirectory();
       Path logFile = sandboxBase.getRelative("sandboxfs.log");
 
-      env.getReporter().handle(Event.info("Mounting sandboxfs instance on " + mountPoint));
-      sandboxfsProcess = RealSandboxfsProcess.mount(
-          PathFragment.create(options.sandboxfsPath), mountPoint, logFile);
+      if (sandboxfsProcess == null) {
+        if (options.sandboxDebug) {
+          env.getReporter().handle(Event.info("Mounting sandboxfs instance on " + mountPoint));
+        }
+        sandboxfsProcess =
+            RealSandboxfsProcess.mount(
+                PathFragment.create(options.sandboxfsPath), mountPoint, logFile);
+      }
     }
 
     Duration timeoutKillDelay =
@@ -196,7 +215,11 @@ public final class SandboxModule extends BlazeModule {
           withFallback(
               cmdEnv,
               LinuxSandboxedStrategy.create(
-                  cmdEnv, sandboxBase, timeoutKillDelay, sandboxfsProcess));
+                  cmdEnv,
+                  sandboxBase,
+                  timeoutKillDelay,
+                  sandboxfsProcess,
+                  options.sandboxfsMapSymlinkTargets));
       builder.addActionContext(new LinuxSandboxedStrategy(cmdEnv.getExecRoot(), spawnRunner));
     }
 
@@ -206,7 +229,11 @@ public final class SandboxModule extends BlazeModule {
           withFallback(
               cmdEnv,
               new DarwinSandboxedSpawnRunner(
-                  cmdEnv, sandboxBase, timeoutKillDelay, sandboxfsProcess));
+                  cmdEnv,
+                  sandboxBase,
+                  timeoutKillDelay,
+                  sandboxfsProcess,
+                  options.sandboxfsMapSymlinkTargets));
       builder.addActionContext(new DarwinSandboxedStrategy(cmdEnv.getExecRoot(), spawnRunner));
     }
 
@@ -217,12 +244,8 @@ public final class SandboxModule extends BlazeModule {
 
       // This makes the "sandboxed" strategy the default Spawn strategy, unless it is
       // overridden by a later BlazeModule.
-      builder.addStrategyByMnemonic("", "sandboxed");
+      builder.addStrategyByMnemonic("", ImmutableList.of("sandboxed"));
     }
-
-    // Do not remove the sandbox base when --sandbox_debug was specified so that people can check
-    // out the contents of the generated sandbox directories.
-    shouldCleanupSandboxBase = !options.sandboxDebug;
   }
 
   private static Path getPathToDockerClient(CommandEnvironment cmdEnv) {
@@ -290,19 +313,39 @@ public final class SandboxModule extends BlazeModule {
     @Override
     public SpawnResult exec(Spawn spawn, SpawnExecutionContext context)
         throws InterruptedException, IOException, ExecException {
-      if (!Spawns.mayBeSandboxed(spawn)) {
-        return fallbackSpawnRunner.exec(spawn, context);
-      } else {
+      if (sandboxSpawnRunner.canExec(spawn)) {
         return sandboxSpawnRunner.exec(spawn, context);
+      } else {
+        return fallbackSpawnRunner.exec(spawn, context);
+      }
+    }
+
+    @Override
+    public boolean canExec(Spawn spawn) {
+      return sandboxSpawnRunner.canExec(spawn) || fallbackSpawnRunner.canExec(spawn);
+    }
+  }
+
+  /**
+   * Unmounts an existing sandboxfs instance unless the user asked not to by providing the {@code
+   * --sandbox_debug} flag.
+   */
+  private void unmountSandboxfs() {
+    if (sandboxfsProcess != null) {
+      if (shouldCleanupSandboxBase) {
+        sandboxfsProcess.destroy();
+        sandboxfsProcess = null;
+      } else {
+        checkNotNull(env, "env not initialized; was beforeCommand called?");
+        env.getReporter()
+            .handle(Event.info("Leaving sandboxfs mounted because of --sandbox_debug"));
       }
     }
   }
 
-  private void unmountSandboxfs(String reason) {
+  /** Silently tries to unmount an existing sandboxfs instance, ignoring errors. */
+  private void tryUnmountSandboxfsOnShutdown() {
     if (sandboxfsProcess != null) {
-      checkNotNull(env, "env not initialized; was beforeCommand called?");
-      env.getReporter().handle(Event.info(reason));
-      // TODO(jmmv): This can be incredibly slow.  Either fix sandboxfs or do it in the background.
       sandboxfsProcess.destroy();
       sandboxfsProcess = null;
     }
@@ -310,12 +353,12 @@ public final class SandboxModule extends BlazeModule {
 
   @Subscribe
   public void buildComplete(@SuppressWarnings("unused") BuildCompleteEvent event) {
-    unmountSandboxfs("Build complete; unmounting sandboxfs...");
+    unmountSandboxfs();
   }
 
   @Subscribe
   public void buildInterrupted(@SuppressWarnings("unused") BuildInterruptedEvent event) {
-    unmountSandboxfs("Build interrupted; unmounting sandboxfs...");
+    unmountSandboxfs();
   }
 
   @Override
@@ -324,19 +367,31 @@ public final class SandboxModule extends BlazeModule {
 
     if (shouldCleanupSandboxBase) {
       try {
-        FileSystemUtils.deleteTree(sandboxBase);
+        sandboxBase.deleteTree();
       } catch (IOException e) {
         env.getReporter().handle(Event.warn("Failed to delete sandbox base " + sandboxBase
             + ": " + e));
       }
       shouldCleanupSandboxBase = false;
-    }
 
-    checkState(sandboxfsProcess == null, "sandboxfs instance should have been shut down at this "
-        + "point; were the buildComplete/buildInterrupted events sent?");
-    sandboxBase = null;
+      checkState(
+          sandboxfsProcess == null,
+          "sandboxfs instance should have been shut down at this "
+              + "point; were the buildComplete/buildInterrupted events sent?");
+      sandboxBase = null;
+    }
 
     env.getEventBus().unregister(this);
     env = null;
+  }
+
+  @Override
+  public void blazeShutdown() {
+    tryUnmountSandboxfsOnShutdown();
+  }
+
+  @Override
+  public void blazeShutdownOnCrash() {
+    tryUnmountSandboxfsOnShutdown();
   }
 }

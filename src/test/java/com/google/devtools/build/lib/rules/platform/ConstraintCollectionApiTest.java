@@ -36,7 +36,7 @@ import org.junit.runners.JUnit4;
 
 /** Tests Skylark API for {@link ConstraintCollection} providers. */
 @RunWith(JUnit4.class)
-public class ConstraintCollectionApiTest extends PlatformInfoApiTest {
+public class ConstraintCollectionApiTest extends PlatformTestCase {
 
   @Test
   public void testConstraintSettings() throws Exception {
@@ -72,6 +72,38 @@ public class ConstraintCollectionApiTest extends PlatformInfoApiTest {
             constraintCollection.has(
                 ConstraintSettingInfo.create(Label.parseAbsoluteUnchecked("//foo:unused"))))
         .isFalse();
+  }
+
+  @Test
+  public void testContraintValue_parent() throws Exception {
+    constraintBuilder("//foo:s1").addConstraintValue("value1").write();
+    constraintBuilder("//foo:s2").addConstraintValue("value2").write();
+    constraintBuilder("//foo:s3").addConstraintValue("value3").addConstraintValue("value4").write();
+    platformBuilder("//foo:p1").addConstraint("value1").addConstraint("value4").write();
+    platformBuilder("//foo:p2").setParent("//foo:p1").addConstraint("value2").write();
+    platformBuilder("//foo:p3").setParent("//foo:p2").addConstraint("value3").write();
+
+    ConstraintCollection constraintCollection = fetchConstraintCollection("//foo:p3");
+    assertThat(constraintCollection).isNotNull();
+
+    ConstraintSettingInfo setting =
+        ConstraintSettingInfo.create(Label.parseAbsoluteUnchecked("//foo:s1"));
+    assertThat(constraintCollection.has(setting)).isTrue();
+    ConstraintValueInfo value = constraintCollection.get(setting);
+    assertThat(value).isNotNull();
+    assertThat(value.label()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:value1"));
+
+    setting = ConstraintSettingInfo.create(Label.parseAbsoluteUnchecked("//foo:s2"));
+    assertThat(constraintCollection.has(setting)).isTrue();
+    value = constraintCollection.get(setting);
+    assertThat(value).isNotNull();
+    assertThat(value.label()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:value2"));
+
+    setting = ConstraintSettingInfo.create(Label.parseAbsoluteUnchecked("//foo:s3"));
+    assertThat(constraintCollection.has(setting)).isTrue();
+    value = constraintCollection.get(setting);
+    assertThat(value).isNotNull();
+    assertThat(value.label()).isEqualTo(Label.parseAbsoluteUnchecked("//foo:value3"));
   }
 
   @Test

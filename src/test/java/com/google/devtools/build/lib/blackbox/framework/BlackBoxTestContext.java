@@ -135,14 +135,14 @@ public final class BlackBoxTestContext {
    *
    * <p>Calls <code>bazel info bazel-genfiles</code>, caches the result.
    *
+   * @param bazel the instance of BuilderRunner to run info with
    * @param subPathUnderGen path to the file under bazel-gen directory
    * @return full path to the resolved file
    * @throws Exception if <code>bazel info</code> command fails
    */
-  public Path resolveGenPath(String subPathUnderGen) throws Exception {
+  public Path resolveGenPath(BuilderRunner bazel, String subPathUnderGen) throws Exception {
     if (genFilesPath == null) {
-      genFilesPath =
-          PathUtils.resolve(workDir, bazel().info(productName + "-genfiles").outString());
+      genFilesPath = PathUtils.resolve(workDir, getInfoValue(bazel, productName + "-genfiles"));
     }
     return PathUtils.resolve(genFilesPath, subPathUnderGen);
   }
@@ -150,34 +150,56 @@ public final class BlackBoxTestContext {
   /**
    * Resolve a path relative to "bazel-bin".
    *
-   * <p>Calls <code>bazel info bazel-bin</code>, caches the result.
+   * <p>Calls <code>bazel info bazel-bin</code>
    *
+   * @param bazel the instance of BuilderRunner to run info with
    * @param subPathUnderBin path to the file under bazel-bin directory
    * @return full path to the resolved file
    * @throws Exception if <code>bazel info</code> command fails
    */
-  public Path resolveBinPath(String subPathUnderBin) throws Exception {
-    if (binFilesPaths == null) {
-      binFilesPaths = PathUtils.resolve(workDir, bazel().info(productName + "-bin").outString());
-    }
-    return PathUtils.resolve(binFilesPaths, subPathUnderBin);
+  public Path resolveBinPath(BuilderRunner bazel, String subPathUnderBin) throws Exception {
+    Path binPath = PathUtils.resolve(workDir, getInfoValue(bazel, productName + "-bin"));
+    return PathUtils.resolve(binPath, subPathUnderBin);
+  }
+
+  /**
+   * Resolve a path relative to "execution_root". Useful for checking the contents of the generated
+   * external repositories.
+   *
+   * <p>Calls <code>bazel info execution_root</code>
+   *
+   * @param bazel the instance of BuilderRunner to run info with
+   * @param subPathUnderBin path to the file under execution_root directory
+   * @return full path to the resolved file
+   * @throws Exception if <code>bazel info</code> command fails
+   */
+  public Path resolveExecRootPath(BuilderRunner bazel, String subPathUnderBin) throws Exception {
+    Path binPath = PathUtils.resolve(workDir, getInfoValue(bazel, "execution_root"));
+    return PathUtils.resolve(binPath, subPathUnderBin);
+  }
+
+  private String getInfoValue(BuilderRunner bazel, String key) throws Exception {
+    String[] parts = bazel.info(key).outString().trim().split(" ");
+    return parts[parts.length - 1];
   }
 
   /**
    * Runs the built executable. Calls <code>bazel info</code> to get the information about bazel-bin
-   * directory location, caches the result for the subsequent calls.
+   * directory location.
    *
+   * @param bazel the instance of BuilderRunner to run info with
    * @param subPathUnderBin path to the executable relative to bazel-bin directory
    * @param timeoutMillis timeout on the process execution
    * @return ProcessResult result of the execution with the process exit code and strings with
    *     stdout and stderr contents.
    * @throws Exception if <code>bazel info</code> command fails or executable invocation fails.
    */
-  public ProcessResult runBuiltBinary(String subPathUnderBin, long timeoutMillis) throws Exception {
+  public ProcessResult runBuiltBinary(
+      BuilderRunner bazel, String subPathUnderBin, long timeoutMillis) throws Exception {
     if (OS.WINDOWS.equals(OS.getCurrent()) && !subPathUnderBin.endsWith(".exe")) {
       subPathUnderBin += ".exe";
     }
-    Path executable = resolveBinPath(subPathUnderBin);
+    Path executable = resolveBinPath(bazel, subPathUnderBin);
     assertThat(Files.exists(executable)).isTrue();
     assertThat(Files.isRegularFile(executable)).isTrue();
     assertThat(Files.isExecutable(executable)).isTrue();

@@ -23,10 +23,11 @@ import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.syntax.UserDefinedFunction;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.skydoc.SkydocMain.StarlarkEvaluationException;
 import com.google.devtools.build.skydoc.rendering.AttributeInfo;
 import com.google.devtools.build.skydoc.rendering.RuleInfo;
 import com.google.devtools.build.skydoc.rendering.UserDefinedFunctionInfo;
@@ -50,15 +51,49 @@ public final class SkydocTest extends SkylarkTestCase {
 
   @Before
   public void setUp() {
-    skydocMain = new SkydocMain(new SkylarkFileAccessor() {
+    skydocMain =
+        new SkydocMain(
+            new SkylarkFileAccessor() {
 
-      @Override
-      public ParserInputSource inputSource(String pathString) throws IOException {
-        Path path = fileSystem.getPath("/" + pathString);
-        byte[] bytes = FileSystemUtils.asByteSource(path).read();
-        return ParserInputSource.create(bytes, path.asFragment());
-      }
-    });
+              @Override
+              public ParserInputSource inputSource(String pathString) throws IOException {
+                Path path = fileSystem.getPath("/" + pathString);
+                byte[] bytes = FileSystemUtils.asByteSource(path).read();
+                return ParserInputSource.create(bytes, path.asFragment());
+              }
+
+              @Override
+              public boolean fileExists(String pathString) {
+                return fileSystem.exists(fileSystem.getPath("/" + pathString));
+              }
+            },
+            "io_bazel",
+            ImmutableList.of("/other_root", "."));
+  }
+
+  @Test
+  public void testStarlarkEvaluationException() throws Exception {
+    scratch.file(
+        "/test/test.bzl",
+        "def rule_impl(ctx):",
+        "  return []",
+        "",
+        "my_rule = rule(",
+        "    invalid_param = 3,",
+        ")");
+
+    StarlarkEvaluationException expected =
+        assertThrows(
+            StarlarkEvaluationException.class,
+            () ->
+                skydocMain.eval(
+                    StarlarkSemantics.DEFAULT_SEMANTICS,
+                    Label.parseAbsoluteUnchecked("//test:test.bzl"),
+                    ImmutableMap.builder(),
+                    ImmutableMap.builder(),
+                    ImmutableMap.builder()));
+
+    assertThat(expected).hasMessageThat().contains("Starlark evaluation error");
   }
 
   @Test
@@ -80,13 +115,11 @@ public final class SkydocTest extends SkylarkTestCase {
         ")");
 
     ImmutableMap.Builder<String, RuleInfo> ruleInfoMap = ImmutableMap.builder();
-    ImmutableList.Builder<RuleInfo> unexportedRuleInfos = ImmutableList.builder();
 
     skydocMain.eval(
-        SkylarkSemantics.DEFAULT_SEMANTICS,
+        StarlarkSemantics.DEFAULT_SEMANTICS,
         Label.parseAbsoluteUnchecked("//test:test.bzl"),
         ruleInfoMap,
-        unexportedRuleInfos,
         ImmutableMap.builder(),
         ImmutableMap.builder());
     Map<String, RuleInfo> ruleInfos = ruleInfoMap.build();
@@ -103,7 +136,6 @@ public final class SkydocTest extends SkylarkTestCase {
         AttributeInfo.Type.STRING_DICT,
         AttributeInfo.Type.OUTPUT,
         AttributeInfo.Type.BOOLEAN).inOrder();
-    assertThat(unexportedRuleInfos.build()).isEmpty();
   }
 
   private static Iterable<String> getAttrNames(RuleInfo ruleInfo) {
@@ -144,22 +176,15 @@ public final class SkydocTest extends SkylarkTestCase {
         ")");
 
     ImmutableMap.Builder<String, RuleInfo> ruleInfoMap = ImmutableMap.builder();
-    ImmutableList.Builder<RuleInfo> unexportedRuleInfos = ImmutableList.builder();
 
     skydocMain.eval(
-        SkylarkSemantics.DEFAULT_SEMANTICS,
+        StarlarkSemantics.DEFAULT_SEMANTICS,
         Label.parseAbsoluteUnchecked("//test:test.bzl"),
         ruleInfoMap,
-        unexportedRuleInfos,
         ImmutableMap.builder(),
         ImmutableMap.builder());
 
     assertThat(ruleInfoMap.build().keySet()).containsExactly("rule_one", "rule_two");
-
-    assertThat(unexportedRuleInfos.build().stream()
-            .map(ruleInfo -> ruleInfo.getDocString())
-            .collect(Collectors.toList()))
-        .containsExactly("This rule is not named", "This rule also is not named");
   }
 
   @Test
@@ -169,14 +194,12 @@ public final class SkydocTest extends SkylarkTestCase {
         "def rule_impl(ctx):",
         "  return struct()");
 
-    scratch.file(
-        "/deps/foo/docstring.bzl",
-        "doc_string = 'Dep rule'");
+    scratch.file("/other_root/deps/foo/other_root.bzl", "doc_string = 'Dep rule'");
 
     scratch.file(
         "/deps/foo/dep_rule.bzl",
         "load('//lib:rule_impl.bzl', 'rule_impl')",
-        "load(':docstring.bzl', 'doc_string')",
+        "load(':other_root.bzl', 'doc_string')",
         "",
         "_hidden_rule = rule(",
         "    doc = doc_string,",
@@ -201,10 +224,9 @@ public final class SkydocTest extends SkylarkTestCase {
     ImmutableMap.Builder<String, RuleInfo> ruleInfoMapBuilder = ImmutableMap.builder();
 
     skydocMain.eval(
-        SkylarkSemantics.DEFAULT_SEMANTICS,
+        StarlarkSemantics.DEFAULT_SEMANTICS,
         Label.parseAbsoluteUnchecked("//test:main.bzl"),
         ruleInfoMapBuilder,
-        ImmutableList.builder(),
         ImmutableMap.builder(),
         ImmutableMap.builder());
 
@@ -253,10 +275,37 @@ public final class SkydocTest extends SkylarkTestCase {
     ImmutableMap.Builder<String, RuleInfo> ruleInfoMapBuilder = ImmutableMap.builder();
 
     skydocMain.eval(
-        SkylarkSemantics.DEFAULT_SEMANTICS,
+        StarlarkSemantics.DEFAULT_SEMANTICS,
         Label.parseAbsoluteUnchecked("//test:main.bzl"),
         ruleInfoMapBuilder,
-        ImmutableList.builder(),
+        ImmutableMap.builder(),
+        ImmutableMap.builder());
+
+    Map<String, RuleInfo> ruleInfoMap = ruleInfoMapBuilder.build();
+
+    assertThat(ruleInfoMap.keySet()).containsExactly("main_rule");
+    assertThat(ruleInfoMap.get("main_rule").getDocString()).isEqualTo("Main rule");
+  }
+
+  @Test
+  public void testLoadOwnRepository() throws Exception {
+    scratch.file("/deps/foo/dep_rule.bzl", "def rule_impl(ctx):", "  return []");
+
+    scratch.file(
+        "/test/main.bzl",
+        "load('@io_bazel//deps/foo:dep_rule.bzl', 'rule_impl')",
+        "",
+        "main_rule = rule(",
+        "    doc = 'Main rule',",
+        "    implementation = rule_impl,",
+        ")");
+
+    ImmutableMap.Builder<String, RuleInfo> ruleInfoMapBuilder = ImmutableMap.builder();
+
+    skydocMain.eval(
+        StarlarkSemantics.DEFAULT_SEMANTICS,
+        Label.parseAbsoluteUnchecked("//test:main.bzl"),
+        ruleInfoMapBuilder,
         ImmutableMap.builder(),
         ImmutableMap.builder());
 
@@ -285,17 +334,14 @@ public final class SkydocTest extends SkylarkTestCase {
         "    implementation = rule_impl,",
         ")");
 
-    ImmutableMap.Builder<String, RuleInfo> ruleInfoMapBuilder = ImmutableMap.builder();
-
-    IllegalStateException expected =
+    StarlarkEvaluationException expected =
         assertThrows(
-            IllegalStateException.class,
+            StarlarkEvaluationException.class,
             () ->
                 skydocMain.eval(
-                    SkylarkSemantics.DEFAULT_SEMANTICS,
+                    StarlarkSemantics.DEFAULT_SEMANTICS,
                     Label.parseAbsoluteUnchecked("//test:main.bzl"),
-                    ruleInfoMapBuilder,
-                    ImmutableList.builder(),
+                    ImmutableMap.builder(),
                     ImmutableMap.builder(),
                     ImmutableMap.builder()));
 
@@ -325,10 +371,9 @@ public final class SkydocTest extends SkylarkTestCase {
     ImmutableMap.Builder<String, UserDefinedFunction> functionInfoBuilder = ImmutableMap.builder();
 
     skydocMain.eval(
-        SkylarkSemantics.DEFAULT_SEMANTICS,
+        StarlarkSemantics.DEFAULT_SEMANTICS,
         Label.parseAbsoluteUnchecked("//test:main.bzl"),
         ImmutableMap.builder(),
-        ImmutableList.builder(),
         ImmutableMap.builder(),
         functionInfoBuilder);
 

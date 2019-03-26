@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 
 #include <windows.h>
 
@@ -41,13 +43,14 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeIsJunction(
     JNIEnv* env, jclass clazz, jstring path, jobjectArray error_msg_holder) {
   std::wstring wpath(bazel::windows::GetJavaWstring(env, path));
-  int result = bazel::windows::IsJunctionOrDirectorySymlink(wpath.c_str());
+  std::wstring error;
+  int result =
+      bazel::windows::IsJunctionOrDirectorySymlink(wpath.c_str(), &error);
   if (result == bazel::windows::IS_JUNCTION_ERROR &&
       CanReportError(env, error_msg_holder)) {
-    DWORD err_code = GetLastError();
     ReportLastError(
         bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
-                                         L"nativeIsJunction", wpath, err_code),
+                                         L"nativeIsJunction", wpath, error),
         env, error_msg_holder);
   }
   return result;
@@ -60,11 +63,13 @@ Java_com_google_devtools_build_lib_windows_jni_WindowsFileOperations_nativeGetLo
   std::unique_ptr<WCHAR[]> result;
   std::wstring wpath(bazel::windows::GetJavaWstring(env, path));
   std::wstring error(bazel::windows::GetLongPath(wpath.c_str(), &result));
-  if (!error.empty() && CanReportError(env, error_msg_holder)) {
-    ReportLastError(
-        bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
-                                         L"nativeGetLongPath", wpath, error),
-        env, error_msg_holder);
+  if (!error.empty()) {
+    if (CanReportError(env, error_msg_holder)) {
+      ReportLastError(
+          bazel::windows::MakeErrorMessage(WSTR(__FILE__), __LINE__,
+                                           L"nativeGetLongPath", wpath, error),
+          env, error_msg_holder);
+    }
     return JNI_FALSE;
   }
   env->SetObjectArrayElement(

@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.remote;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.auth.Credentials;
+import com.google.devtools.build.lib.remote.blobstore.CombinedDiskHttpBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.OnDiskBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.http.HttpBlobStore;
@@ -25,7 +26,6 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import io.netty.channel.unix.DomainSocketAddress;
 import java.io.IOException;
 import java.net.URI;
-import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 /**
@@ -39,18 +39,21 @@ public final class SimpleBlobStoreFactory {
   public static SimpleBlobStore createRest(RemoteOptions options, Credentials creds) {
     try {
       URI uri = URI.create(options.remoteHttpCache);
-      int timeoutMillis = (int) TimeUnit.SECONDS.toMillis(options.remoteTimeout);
 
       if (options.remoteCacheProxy != null) {
         if (options.remoteCacheProxy.startsWith("unix:")) {
           return HttpBlobStore.create(
-            new DomainSocketAddress(options.remoteCacheProxy.replaceFirst("^unix:", "")),
-              uri, timeoutMillis, options.remoteMaxConnections, creds);
+              new DomainSocketAddress(options.remoteCacheProxy.replaceFirst("^unix:", "")),
+              uri,
+              options.remoteTimeout,
+              options.remoteMaxConnections,
+              creds);
         } else {
           throw new Exception("Remote cache proxy unsupported: " + options.remoteCacheProxy);
         }
       } else {
-        return HttpBlobStore.create(uri, timeoutMillis, options.remoteMaxConnections, creds);
+        return HttpBlobStore.create(
+            uri, options.remoteTimeout, options.remoteMaxConnections, creds);
       }
     } catch (Exception e) {
       throw new RuntimeException(e);
@@ -66,9 +69,23 @@ public final class SimpleBlobStoreFactory {
     return new OnDiskBlobStore(cacheDir);
   }
 
+  public static SimpleBlobStore createCombinedCache(
+      Path workingDirectory, PathFragment diskCachePath, RemoteOptions options, Credentials cred)
+      throws IOException {
+    Path cacheDir = workingDirectory.getRelative(checkNotNull(diskCachePath));
+    if (!cacheDir.exists()) {
+      cacheDir.createDirectoryAndParents();
+    }
+    return new CombinedDiskHttpBlobStore(cacheDir, createRest(options, cred));
+  }
+
   public static SimpleBlobStore create(
       RemoteOptions options, @Nullable Credentials creds, @Nullable Path workingDirectory)
       throws IOException {
+
+    if (isRestUrlOptions(options) && isDiskCache(options)) {
+      return createCombinedCache(workingDirectory, options.diskCache, options, creds);
+    }
     if (isRestUrlOptions(options)) {
       return createRest(options, creds);
     }

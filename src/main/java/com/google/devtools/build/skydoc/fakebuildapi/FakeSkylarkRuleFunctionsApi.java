@@ -119,6 +119,7 @@ public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<File
       SkylarkList<?> execCompatibleWith,
       Object analysisTest,
       Object buildSetting,
+      Object cfg,
       FuncallExpression ast,
       Environment funcallEnv,
       StarlarkContext context)
@@ -148,8 +149,13 @@ public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<File
   }
 
   @Override
-  public Label label(String labelString, Boolean relativeToCallerRepository, Location loc,
-      Environment env) throws EvalException {
+  public Label label(
+      String labelString,
+      Boolean relativeToCallerRepository,
+      Location loc,
+      Environment env,
+      StarlarkContext context)
+      throws EvalException {
     try {
       return Label.parseAbsolute(
           labelString,
@@ -200,7 +206,7 @@ public class FakeSkylarkRuleFunctionsApi implements SkylarkRuleFunctionsApi<File
    * A comparator for {@link AttributeInfo} objects which sorts by attribute name alphabetically,
    * except that any attribute named "name" is placed first.
    */
-  private static class AttributeNameComparator implements Comparator<AttributeInfo> {
+  public static class AttributeNameComparator implements Comparator<AttributeInfo> {
 
     @Override
     public int compare(AttributeInfo o1, AttributeInfo o2) {

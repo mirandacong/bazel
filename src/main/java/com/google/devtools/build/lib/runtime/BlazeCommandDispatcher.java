@@ -24,6 +24,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Flushables;
 import com.google.common.util.concurrent.UncheckedExecutionException;
+import com.google.devtools.build.lib.analysis.NoBuildEvent;
+import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.buildtool.buildevent.ProfilerStartedEvent;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.events.Event;
@@ -226,6 +228,23 @@ public class BlazeCommandDispatcher {
     }
   }
 
+  /**
+   * For testing ONLY. Same as {@link #exec(InvocationPolicy, List, OutErr, LockingMode, String,
+   * long, Optional<List<Pair<String, String>>>)}, but automatically uses the current time.
+   */
+  @VisibleForTesting
+  public BlazeCommandResult exec(List<String> args, String clientDescription, OutErr originalOutErr)
+      throws InterruptedException {
+    return exec(
+        InvocationPolicy.getDefaultInstance(),
+        args,
+        originalOutErr,
+        LockingMode.ERROR_OUT,
+        clientDescription,
+        runtime.getClock().currentTimeMillis(),
+        Optional.empty() /* startupOptionBundles */);
+  }
+
   private BlazeCommandResult execExclusively(
       OriginalUnstructuredCommandLineEvent unstructuredServerCommandLineEvent,
       InvocationPolicy invocationPolicy,
@@ -312,7 +331,14 @@ public class BlazeCommandDispatcher {
       // Early exit. We need to guarantee that the ErrOut and Reporter setup below never error out,
       // so any invariants they need must be checked before this point.
       if (!earlyExitCode.equals(ExitCode.SUCCESS)) {
-        return replayEarlyExitEvents(outErr, optionHandler, storedEventHandler, env, earlyExitCode);
+        return replayEarlyExitEvents(
+            outErr,
+            optionHandler,
+            storedEventHandler,
+            env,
+            earlyExitCode,
+            new NoBuildEvent(
+                commandName, firstContactTime, false, true, env.getCommandId().toString()));
       }
 
       Reporter reporter = env.getReporter();
@@ -470,7 +496,14 @@ public class BlazeCommandDispatcher {
       // Parse starlark options.
       earlyExitCode = optionHandler.parseStarlarkOptions(env, storedEventHandler);
       if (!earlyExitCode.equals(ExitCode.SUCCESS)) {
-        return replayEarlyExitEvents(outErr, optionHandler, storedEventHandler, env, earlyExitCode);
+        return replayEarlyExitEvents(
+            outErr,
+            optionHandler,
+            storedEventHandler,
+            env,
+            earlyExitCode,
+            new NoBuildEvent(
+                commandName, firstContactTime, false, true, env.getCommandId().toString()));
       }
       options = optionHandler.getOptionsResult();
 
@@ -511,7 +544,8 @@ public class BlazeCommandDispatcher {
       BlazeOptionHandler optionHandler,
       StoredEventHandler storedEventHandler,
       CommandEnvironment env,
-      ExitCode earlyExitCode) {
+      ExitCode earlyExitCode,
+      NoBuildEvent noBuildEvent) {
     PrintingEventHandler printingEventHandler =
         new PrintingEventHandler(outErr, EventKind.ALL_EVENTS);
     for (String note : optionHandler.getRcfileNotes()) {
@@ -523,24 +557,8 @@ public class BlazeCommandDispatcher {
     for (Postable post : storedEventHandler.getPosts()) {
       env.getEventBus().post(post);
     }
+    env.getEventBus().post(noBuildEvent);
     return BlazeCommandResult.exitCode(earlyExitCode);
-  }
-
-  /**
-   * For testing ONLY. Same as {@link #exec(InvocationPolicy, List, OutErr, LockingMode, String,
-   * long, Optional<List<Pair<String, String>>>)}, but automatically uses the current time.
-   */
-  @VisibleForTesting
-  public BlazeCommandResult exec(List<String> args, String clientDescription, OutErr originalOutErr)
-      throws InterruptedException {
-    return exec(
-        InvocationPolicy.getDefaultInstance(),
-        args,
-        originalOutErr,
-        LockingMode.ERROR_OUT,
-        clientDescription,
-        runtime.getClock().currentTimeMillis(),
-        Optional.empty() /* startupOptionBundles */);
   }
 
   private OutErr bufferOut(OutErr outErr, boolean fully) {

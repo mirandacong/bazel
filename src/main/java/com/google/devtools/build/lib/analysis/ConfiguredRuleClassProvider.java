@@ -31,14 +31,15 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ComposingRuleTransitionFactory;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
-import com.google.devtools.build.lib.analysis.config.DefaultsPackage;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.constraints.ConstraintSemantics;
 import com.google.devtools.build.lib.analysis.skylark.BazelStarlarkContext;
 import com.google.devtools.build.lib.analysis.skylark.SkylarkModules;
+import com.google.devtools.build.lib.analysis.skylark.SymbolGenerator;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.graph.Digraph;
 import com.google.devtools.build.lib.graph.Node;
@@ -48,11 +49,11 @@ import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.OutputFile;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
+import com.google.devtools.build.lib.packages.RuleClass.Builder.ThirdPartyLicenseExistencePolicy;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.RuleErrorConsumer;
 import com.google.devtools.build.lib.packages.RuleTransitionFactory;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skylarkbuildapi.Bootstrap;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
@@ -61,17 +62,20 @@ import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Environment.Extension;
 import com.google.devtools.build.lib.syntax.Environment.GlobalFrame;
 import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
 import com.google.devtools.build.lib.syntax.SkylarkUtils;
 import com.google.devtools.build.lib.syntax.SkylarkUtils.Phase;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDefinition;
 import com.google.devtools.common.options.OptionsProvider;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -236,7 +240,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     private final List<ConfigurationFragmentFactory> configurationFragmentFactories =
         new ArrayList<>();
     private final List<BuildInfoFactory> buildInfoFactories = new ArrayList<>();
-    private final List<Class<? extends FragmentOptions>> configurationOptions = new ArrayList<>();
+    private final Set<Class<? extends FragmentOptions>> configurationOptions =
+        new LinkedHashSet<>();
 
     private final Map<String, RuleClass> ruleClassMap = new HashMap<>();
     private final Map<String, RuleDefinition> ruleDefinitionMap = new HashMap<>();
@@ -259,6 +264,9 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     private BuildConfiguration.ActionEnvironmentProvider actionEnvironmentProvider =
         (BuildOptions options) -> ActionEnvironment.EMPTY;
     private ConstraintSemantics constraintSemantics = new ConstraintSemantics();
+
+    private ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy =
+        ThirdPartyLicenseExistencePolicy.USER_CONTROLLABLE;
 
     public Builder addWorkspaceFilePrefix(String contents) {
       defaultWorkspaceFilePrefix.append(contents);
@@ -323,43 +331,26 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
       return this;
     }
 
-    public Builder addConfigurationOptions(Class<? extends FragmentOptions> configurationOptions) {
-      this.configurationOptions.add(configurationOptions);
-      return this;
-    }
-
     /**
-     * Adds an options class and a corresponding factory. There's usually a 1:1:1 correspondence
-     * between option classes, factories, and fragments, such that the factory depends only on the
-     * options class and creates the fragment. This method provides a convenient way of adding both
-     * the options class and the factory in a single call.
+     * Adds a configuration fragment factory and all build options required by its fragment.
      *
-     * <p>Note that configuration fragments annotated with a Skylark name must have a unique
-     * name; no two different configuration fragments can share the same name.
-     */
-    public Builder addConfig(
-        Class<? extends FragmentOptions> options, ConfigurationFragmentFactory factory) {
-      // Enforce that the factory requires the options.
-      Preconditions.checkState(factory.requiredOptions().contains(options));
-      this.configurationOptions.add(options);
-      this.configurationFragmentFactories.add(factory);
-      return this;
-    }
-
-    public Builder addConfigurationOptions(
-        Collection<Class<? extends FragmentOptions>> optionsClasses) {
-      this.configurationOptions.addAll(optionsClasses);
-      return this;
-    }
-
-    /**
-     * Adds a configuration fragment factory.
-     *
-     * <p>Note that configuration fragments annotated with a Skylark name must have a unique
-     * name; no two different configuration fragments can share the same name.
+     * <p>Note that configuration fragments annotated with a Skylark name must have a unique name;
+     * no two different configuration fragments can share the same name.
      */
     public Builder addConfigurationFragment(ConfigurationFragmentFactory factory) {
+      this.configurationOptions.addAll(factory.requiredOptions());
       configurationFragmentFactories.add(factory);
+      return this;
+    }
+
+    /**
+     * Adds configuration options that aren't required by configuration fragments.
+     *
+     * <p>If {@link #addConfigurationFragment(ConfigurationFragmentFactory)} adds a fragment factory
+     * that also requires these options, this method is redundant.
+     */
+    public Builder addConfigurationOptions(Class<? extends FragmentOptions> configurationOptions) {
+      this.configurationOptions.add(configurationOptions);
       return this;
     }
 
@@ -397,6 +388,15 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
      */
     public Builder setConstraintSemantics(ConstraintSemantics constraintSemantics) {
       this.constraintSemantics = constraintSemantics;
+      return this;
+    }
+
+    /**
+     * Sets the policy for checking if third_party rules declare <code>licenses()</code>. See {@link
+     * #thirdPartyLicenseExistencePolicy} for the default value.
+     */
+    public Builder setThirdPartyLicenseExistencePolicy(ThirdPartyLicenseExistencePolicy policy) {
+      this.thirdPartyLicenseExistencePolicy = policy;
       return this;
     }
 
@@ -502,6 +502,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
       RuleClass.Builder builder = new RuleClass.Builder(
           metadata.name(), metadata.type(), false, ancestorClasses);
       builder.factory(factory);
+      builder.setThirdPartyLicenseExistencePolicy(thirdPartyLicenseExistencePolicy);
       RuleClass ruleClass = instance.build(builder, this);
       ruleMap.put(definitionClass, ruleClass);
       ruleClassMap.put(ruleClass.getName(), ruleClass);
@@ -536,7 +537,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
           skylarkBootstraps.build(),
           ImmutableSet.copyOf(reservedActionMnemonics),
           actionEnvironmentProvider,
-          constraintSemantics);
+          constraintSemantics,
+          thirdPartyLicenseExistencePolicy);
     }
 
     @Override
@@ -599,6 +601,13 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   /** The set of configuration fragment factories. */
   private final ImmutableList<ConfigurationFragmentFactory> configurationFragmentFactories;
 
+  /**
+   * Maps build option names to matching config fragments. This is used to determine correct
+   * fragment requirements for config_setting rules, which are unique in that their dependencies are
+   * triggered by string representations of option names.
+   */
+  private final Map<String, Class<? extends Fragment>> optionsToFragmentMap;
+
   /** The transition factory used to produce the transition that will trim targets. */
   @Nullable private final RuleTransitionFactory trimmingTransitionFactory;
 
@@ -625,6 +634,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
 
   private final ConstraintSemantics constraintSemantics;
 
+  private final ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy;
+
   private ConfiguredRuleClassProvider(
       Label preludeLabel,
       String runfilesPrefix,
@@ -645,7 +656,8 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
       ImmutableList<Bootstrap> skylarkBootstraps,
       ImmutableSet<String> reservedActionMnemonics,
       BuildConfiguration.ActionEnvironmentProvider actionEnvironmentProvider,
-      ConstraintSemantics constraintSemantics) {
+      ConstraintSemantics constraintSemantics,
+      ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy) {
     this.preludeLabel = preludeLabel;
     this.runfilesPrefix = runfilesPrefix;
     this.toolsRepository = toolsRepository;
@@ -657,6 +669,7 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     this.buildInfoFactories = buildInfoFactories;
     this.configurationOptions = configurationOptions;
     this.configurationFragmentFactories = configurationFragments;
+    this.optionsToFragmentMap = computeOptionsToFragmentMap(configurationFragments);
     this.universalFragments = universalFragments;
     this.trimmingTransitionFactory = trimmingTransitionFactory;
     this.shouldInvalidateCacheForOptionDiff = shouldInvalidateCacheForOptionDiff;
@@ -666,6 +679,38 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     this.actionEnvironmentProvider = actionEnvironmentProvider;
     this.configurationFragmentMap = createFragmentMap(configurationFragmentFactories);
     this.constraintSemantics = constraintSemantics;
+    this.thirdPartyLicenseExistencePolicy = thirdPartyLicenseExistencePolicy;
+  }
+
+  /**
+   * Computes the option name --> config fragments map. Note that this mapping is technically
+   * one-to-many: a single option may be required by multiple fragments (e.g. Java options are used
+   * by both JavaConfiguration and Jvm). In such cases, we arbitrarily choose one fragment since
+   * that's all that's needed to satisfy the config_setting.
+   */
+  private static Map<String, Class<? extends Fragment>> computeOptionsToFragmentMap(
+      Iterable<ConfigurationFragmentFactory> configurationFragments) {
+    Map<String, Class<? extends Fragment>> result = new LinkedHashMap<>();
+    Map<Class<? extends FragmentOptions>, Integer> visitedOptionsClasses = new HashMap<>();
+    for (ConfigurationFragmentFactory factory : configurationFragments) {
+      Set<Class<? extends FragmentOptions>> requiredOpts = factory.requiredOptions();
+      for (Class<? extends FragmentOptions> optionsClass : requiredOpts) {
+        Integer previousBest = visitedOptionsClasses.get(optionsClass);
+        if (previousBest != null && previousBest <= requiredOpts.size()) {
+          // Multiple config fragments may require the same options class, but we only need one of
+          // them to guarantee that class makes it into the configuration. Pick one that depends
+          // on as few options classes as possible (not necessarily unique).
+          continue;
+        }
+        visitedOptionsClasses.put(optionsClass, requiredOpts.size());
+        for (Field field : optionsClass.getFields()) {
+          if (field.isAnnotationPresent(Option.class)) {
+            result.put(field.getAnnotation(Option.class).name(), factory.creates());
+          }
+        }
+      }
+    }
+    return result;
   }
 
   public PrerequisiteValidator getPrerequisiteValidator() {
@@ -716,6 +761,11 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
     return configurationFragmentFactories;
   }
 
+  @Nullable
+  public Class<? extends Fragment> getConfigurationFragmentForOption(String requiredOption) {
+    return optionsToFragmentMap.get(requiredOption);
+  }
+
   /**
    * Returns the transition factory used to produce the transition to trim targets.
    *
@@ -757,21 +807,6 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   }
 
   /**
-   * Returns the defaults package for the default settings.
-   */
-  public String getDefaultsPackageContent(InvocationPolicy invocationPolicy) {
-    return DefaultsPackage.getDefaultsPackageContent(configurationOptions, invocationPolicy);
-  }
-
-  /**
-   * Returns the defaults package for the given options taken from an optionsProvider.
-   */
-  public String getDefaultsPackageContent(OptionsProvider optionsProvider) {
-    return DefaultsPackage.getDefaultsPackageContent(
-        BuildOptions.of(configurationOptions, optionsProvider));
-  }
-
-  /**
    * Creates a BuildOptions class for the given options taken from an optionsProvider.
    */
   public BuildOptions createBuildOptions(OptionsProvider optionsProvider) {
@@ -807,17 +842,23 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
 
   private Environment createSkylarkRuleClassEnvironment(
       Mutability mutability,
-      Environment.GlobalFrame globals,
-      SkylarkSemantics skylarkSemantics,
+      GlobalFrame globals,
+      StarlarkSemantics starlarkSemantics,
       EventHandler eventHandler,
       String astFileContentHashCode,
-      Map<String, Extension> importMap) {
+      Map<String, Extension> importMap,
+      ImmutableMap<RepositoryName, RepositoryName> repoMapping,
+      Label callerLabel) {
     BazelStarlarkContext context =
-        new BazelStarlarkContext(toolsRepository, configurationFragmentMap);
+        new BazelStarlarkContext(
+            toolsRepository,
+            configurationFragmentMap,
+            repoMapping,
+            new SymbolGenerator<>(callerLabel));
     Environment env =
         Environment.builder(mutability)
             .setGlobals(globals)
-            .setSemantics(skylarkSemantics)
+            .setSemantics(starlarkSemantics)
             .setEventHandler(eventHandler)
             .setFileContentHashCode(astFileContentHashCode)
             .setStarlarkContext(context)
@@ -831,17 +872,20 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
   public Environment createSkylarkRuleClassEnvironment(
       Label extensionLabel,
       Mutability mutability,
-      SkylarkSemantics skylarkSemantics,
+      StarlarkSemantics starlarkSemantics,
       EventHandler eventHandler,
       String astFileContentHashCode,
-      Map<String, Extension> importMap) {
+      Map<String, Extension> importMap,
+      ImmutableMap<RepositoryName, RepositoryName> repoMapping) {
     return createSkylarkRuleClassEnvironment(
         mutability,
         globals.withLabel(extensionLabel),
-        skylarkSemantics,
+        starlarkSemantics,
         eventHandler,
         astFileContentHashCode,
-        importMap);
+        importMap,
+        repoMapping,
+        extensionLabel);
   }
 
   @Override
@@ -861,6 +905,11 @@ public class ConfiguredRuleClassProvider implements RuleClassProvider {
 
   public ConstraintSemantics getConstraintSemantics() {
     return constraintSemantics;
+  }
+
+  @Override
+  public ThirdPartyLicenseExistencePolicy getThirdPartyLicenseExistencePolicy() {
+    return thirdPartyLicenseExistencePolicy;
   }
 
   /** Returns all skylark objects in global scope for this RuleClassProvider. */

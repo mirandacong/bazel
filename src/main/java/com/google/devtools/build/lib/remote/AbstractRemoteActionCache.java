@@ -37,7 +37,6 @@ import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
-import com.google.devtools.build.lib.remote.TreeNodeRepository.TreeNode;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.Utils;
 import com.google.devtools.build.lib.util.io.FileOutErr;
@@ -47,7 +46,6 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Symlinks;
-import io.grpc.Context;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -72,38 +70,13 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     ((SettableFuture<byte[]>) EMPTY_BYTES).set(new byte[0]);
   }
 
-  public static boolean causedByCacheMiss(IOException t) {
-    return t.getCause() instanceof CacheNotFoundException;
-  }
-
   protected final RemoteOptions options;
   protected final DigestUtil digestUtil;
-  private final Retrier retrier;
 
-  public AbstractRemoteActionCache(RemoteOptions options, DigestUtil digestUtil, Retrier retrier) {
+  public AbstractRemoteActionCache(RemoteOptions options, DigestUtil digestUtil) {
     this.options = options;
     this.digestUtil = digestUtil;
-    this.retrier = retrier;
   }
-
-  /**
-   * Ensures that the tree structure of the inputs, the input files themselves, and the command are
-   * available in the remote cache, such that the tree can be reassembled and executed on another
-   * machine given the root digest.
-   *
-   * <p>The cache may check whether files or parts of the tree structure are already present, and do
-   * not need to be uploaded again.
-   *
-   * <p>Note that this method is only required for remote execution, not for caching itself.
-   * However, remote execution uses a cache to store input files, and that may be a separate
-   * end-point from the executor itself, so the functionality lives here. A pure remote caching
-   * implementation that does not support remote execution may choose not to implement this
-   * function, and throw {@link UnsupportedOperationException} instead. If so, it should be clearly
-   * documented that it cannot be used for remote execution.
-   */
-  public abstract void ensureInputsPresent(
-      TreeNodeRepository repository, Path execRoot, TreeNode root, Action action, Command command)
-      throws IOException, InterruptedException;
 
   /**
    * Attempts to look up the given action in the remote cache and return its result, if present.
@@ -116,11 +89,10 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
       throws IOException, InterruptedException;
 
   /**
-   * Upload the result of a locally executed action to the cache by uploading any necessary files,
-   * stdin / stdout, as well as adding an entry for the given action key to the cache if
-   * uploadAction is true.
+   * Upload the result of a locally executed action to the remote cache.
    *
-   * @throws IOException if the remote cache is unavailable.
+   * @throws IOException if there was an error uploading to the remote cache
+   * @throws ExecException if uploading any of the action outputs is not supported
    */
   abstract void upload(
       DigestUtil.ActionKey actionKey,
@@ -128,8 +100,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
       Command command,
       Path execRoot,
       Collection<Path> files,
-      FileOutErr outErr,
-      boolean uploadAction)
+      FileOutErr outErr)
       throws ExecException, IOException, InterruptedException;
 
   /**
@@ -177,26 +148,21 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
    * @throws IOException in case of a cache miss or if the remote cache is unavailable.
    * @throws ExecException in case clean up after a failed download failed.
    */
-  // TODO(olaola): will need to amend to include the TreeNodeRepository for updating.
   public void download(ActionResult result, Path execRoot, FileOutErr outErr)
       throws ExecException, IOException, InterruptedException {
-    Context ctx = Context.current();
     List<FuturePathBooleanTuple> fileDownloads =
         Collections.synchronizedList(
             new ArrayList<>(result.getOutputFilesCount() + result.getOutputDirectoriesCount()));
     for (OutputFile file : result.getOutputFilesList()) {
       Path path = execRoot.getRelative(file.getPath());
-      ListenableFuture<Void> download =
-          retrier.executeAsync(
-              () -> ctx.call(() -> downloadFile(path, file.getDigest())));
+      ListenableFuture<Void> download = downloadFile(path, file.getDigest());
       fileDownloads.add(new FuturePathBooleanTuple(download, path, file.getIsExecutable()));
     }
 
     List<ListenableFuture<Void>> dirDownloads = new ArrayList<>(result.getOutputDirectoriesCount());
     for (OutputDirectory dir : result.getOutputDirectoriesList()) {
       SettableFuture<Void> dirDownload = SettableFuture.create();
-      ListenableFuture<byte[]> protoDownload =
-          retrier.executeAsync(() -> ctx.call(() -> downloadBlob(dir.getTreeDigest())));
+      ListenableFuture<byte[]> protoDownload = downloadBlob(dir.getTreeDigest());
       Futures.addCallback(
           protoDownload,
           new FutureCallback<byte[]>() {
@@ -209,7 +175,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
                   childrenMap.put(digestUtil.compute(child), child);
                 }
                 Path path = execRoot.getRelative(dir.getPath());
-                fileDownloads.addAll(downloadDirectory(path, tree.getRoot(), childrenMap, ctx));
+                fileDownloads.addAll(downloadDirectory(path, tree.getRoot(), childrenMap));
                 dirDownload.set(null);
               } catch (IOException e) {
                 dirDownload.setException(e);
@@ -232,7 +198,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
 
     IOException downloadException = null;
     try {
-      fileDownloads.addAll(downloadOutErr(result, outErr, ctx));
+      fileDownloads.addAll(downloadOutErr(result, outErr));
     } catch (IOException e) {
       downloadException = e;
     }
@@ -267,7 +233,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
         for (OutputDirectory directory : result.getOutputDirectoriesList()) {
           // Only delete the directories below the output directories because the output
           // directories will not be re-created
-          FileSystemUtils.deleteTreesBelow(execRoot.getRelative(directory.getPath()));
+          execRoot.getRelative(directory.getPath()).deleteTreesBelow();
         }
         if (outErr != null) {
           outErr.getOutputPath().delete();
@@ -359,8 +325,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
    * digest.
    */
   private List<FuturePathBooleanTuple> downloadDirectory(
-      Path path, Directory dir, Map<Digest, Directory> childrenMap, Context ctx)
-      throws IOException {
+      Path path, Directory dir, Map<Digest, Directory> childrenMap) throws IOException {
     // Ensure that the directory is created here even though the directory might be empty
     path.createDirectoryAndParents();
 
@@ -373,10 +338,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
       Path childPath = path.getRelative(child.getName());
       downloads.add(
           new FuturePathBooleanTuple(
-              retrier.executeAsync(
-                  () -> ctx.call(() -> downloadFile(childPath, child.getDigest()))),
-              childPath,
-              child.getIsExecutable()));
+              downloadFile(childPath, child.getDigest()), childPath, child.getIsExecutable()));
     }
 
     for (DirectoryNode child : dir.getDirectoriesList()) {
@@ -393,7 +355,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
                 + childDigest
                 + "not found");
       }
-      downloads.addAll(downloadDirectory(childPath, childDir, childrenMap, ctx));
+      downloads.addAll(downloadDirectory(childPath, childDir, childrenMap));
     }
 
     return downloads;
@@ -426,12 +388,13 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
 
           @Override
           public void onFailure(Throwable t) {
-            outerF.setException(t);
             try {
               out.close();
             } catch (IOException e) {
               // Intentionally left empty. The download already failed, so we can ignore
               // the error on close().
+            } finally {
+              outerF.setException(t);
             }
           }
         },
@@ -439,8 +402,8 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     return outerF;
   }
 
-  private List<FuturePathBooleanTuple> downloadOutErr(
-      ActionResult result, FileOutErr outErr, Context ctx) throws IOException {
+  private List<FuturePathBooleanTuple> downloadOutErr(ActionResult result, FileOutErr outErr)
+      throws IOException {
     List<FuturePathBooleanTuple> downloads = new ArrayList<>();
     if (!result.getStdoutRaw().isEmpty()) {
       result.getStdoutRaw().writeTo(outErr.getOutputStream());
@@ -448,12 +411,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     } else if (result.hasStdoutDigest()) {
       downloads.add(
           new FuturePathBooleanTuple(
-              retrier.executeAsync(
-                  () ->
-                      ctx.call(
-                          () -> downloadBlob(result.getStdoutDigest(), outErr.getOutputStream()))),
-              null,
-              false));
+              downloadBlob(result.getStdoutDigest(), outErr.getOutputStream()), null, false));
     }
     if (!result.getStderrRaw().isEmpty()) {
       result.getStderrRaw().writeTo(outErr.getErrorStream());
@@ -461,12 +419,7 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
     } else if (result.hasStderrDigest()) {
       downloads.add(
           new FuturePathBooleanTuple(
-              retrier.executeAsync(
-                  () ->
-                      ctx.call(
-                          () -> downloadBlob(result.getStderrDigest(), outErr.getErrorStream()))),
-              null,
-              false));
+              downloadBlob(result.getStderrDigest(), outErr.getErrorStream()), null, false));
     }
     return downloads;
   }
@@ -697,6 +650,17 @@ public abstract class AbstractRemoteActionCache implements AutoCloseable {
                   + "uploaded to a remote cache. "
                   + "Change the file type or use --remote_allow_symlink_upload.",
               what.relativeTo(execRoot), kind));
+    }
+  }
+
+  protected void verifyContents(String expectedHash, String actualHash) throws IOException {
+    if (!expectedHash.equals(actualHash)) {
+      String msg =
+          String.format(
+              "An output download failed, because the expected hash"
+                  + "'%s' did not match the received hash '%s'.",
+              expectedHash, actualHash);
+      throw new IOException(msg);
     }
   }
 

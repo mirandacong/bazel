@@ -19,12 +19,13 @@ import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.NoBuildEvent;
 import com.google.devtools.build.lib.analysis.NoBuildRequestFinishedEvent;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOrderEvent;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.ResolvedEvent;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.pkgcache.PackageCacheOptions;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryDirectoryValue;
@@ -38,7 +39,6 @@ import com.google.devtools.build.lib.runtime.LoadingPhaseThreadsOption;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
-import com.google.devtools.build.lib.skyframe.WorkspaceFileValue;
 import com.google.devtools.build.lib.syntax.Printer;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
@@ -89,7 +89,7 @@ public final class SyncCommand implements BlazeCommand {
                   true,
                   true,
                   env.getCommandId().toString()));
-      env.setupPackageCache(options, env.getRuntime().getDefaultsPackageContent());
+      env.setupPackageCache(options);
       SkyframeExecutor skyframeExecutor = env.getSkyframeExecutor();
       skyframeExecutor.injectExtraPrecomputedValues(
           ImmutableList.of(
@@ -98,7 +98,7 @@ public final class SyncCommand implements BlazeCommand {
                   env.getCommandId().toString())));
 
       // Obtain the key for the top-level WORKSPACE file
-      SkyKey packageLookupKey = PackageLookupValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER);
+      SkyKey packageLookupKey = PackageLookupValue.key(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER);
       LoadingPhaseThreadsOption threadsOption = options.getOptions(LoadingPhaseThreadsOption.class);
       EvaluationContext evaluationContext =
           EvaluationContext.newBuilder()
@@ -117,7 +117,7 @@ public final class SyncCommand implements BlazeCommand {
       }
       RootedPath workspacePath =
           ((PackageLookupValue) packageLookupValue.get(packageLookupKey))
-              .getRootedPath(Label.EXTERNAL_PACKAGE_IDENTIFIER);
+              .getRootedPath(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER);
       SkyKey workspace = WorkspaceFileValue.key(workspacePath);
 
       // read and evaluate the WORKSPACE file to its end

@@ -29,6 +29,7 @@ import com.google.common.collect.Streams;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.ArtifactResolver.ArtifactResolverSupplier;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.shell.ShellUtils;
@@ -40,8 +41,6 @@ import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.syntax.EvalUtils;
-import com.google.devtools.build.lib.syntax.EvalUtils.ComparisonException;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -109,12 +108,12 @@ public class Artifact
     implements FileType.HasFileType,
         ActionInput,
         FileApi,
-        Comparable<Object>,
+        Comparable<Artifact>,
         CommandLineItem,
         SkyKey {
 
   /** Compares artifact according to their exec paths. Sorts null values first. */
-  @SuppressWarnings("ReferenceEquality")  // "a == b" is an optimization
+  @SuppressWarnings("ReferenceEquality") // "a == b" is an optimization
   public static final Comparator<Artifact> EXEC_PATH_COMPARATOR =
       (a, b) -> {
         if (a == b) {
@@ -122,9 +121,31 @@ public class Artifact
         } else if (a == null) {
           return -1;
         } else if (b == null) {
-          return -1;
+          return 1;
         } else {
           return a.execPath.compareTo(b.execPath);
+        }
+      };
+
+  /** Compares artifact according to their root relative paths. Sorts null values first. */
+  @SuppressWarnings("ReferenceEquality") // "a == b" is an optimization
+  public static final Comparator<Artifact> ROOT_RELATIVE_PATH_COMPARATOR =
+      (a, b) -> {
+        if (a == b) {
+          return 0;
+        } else if (a == null) {
+          return -1;
+        } else if (b == null) {
+          return 1;
+        } else {
+          int result = a.rootRelativePath.compareTo(b.rootRelativePath);
+          if (result == 0) {
+            // Use the full exec path as a fallback if the root-relative paths are the same, thus
+            // avoiding problems when ImmutableSortedMaps are switched from EXEC_PATH_COMPARATOR.
+            return a.execPath.compareTo(b.execPath);
+          } else {
+            return result;
+          }
         }
       };
 
@@ -143,11 +164,8 @@ public class Artifact
   public static final SkyFunctionName ARTIFACT = SkyFunctionName.createHermetic("ARTIFACT");
 
   @Override
-  public int compareTo(Object o) {
-    if (o instanceof Artifact) {
-      return EXEC_PATH_COMPARATOR.compare(this, (Artifact) o);
-    }
-    throw new ComparisonException("Cannot compare artifact with " + EvalUtils.getDataTypeName(o));
+  public int compareTo(Artifact o) {
+    return EXEC_PATH_COMPARATOR.compare(this, o);
   }
 
   /** An object that can expand middleman and tree artifacts. */
@@ -600,7 +618,7 @@ public class Artifact
   @Immutable
   @AutoCodec
   public static final class TreeFileArtifact extends Artifact {
-    private final SpecialArtifact parentTreeArtifact;
+    private final Artifact parentTreeArtifact;
     private final PathFragment parentRelativePath;
 
     /**
@@ -609,7 +627,7 @@ public class Artifact
      * of the parent TreeArtifact.
      */
     @VisibleForTesting
-    public TreeFileArtifact(SpecialArtifact parent, PathFragment parentRelativePath) {
+    public TreeFileArtifact(Artifact parent, PathFragment parentRelativePath) {
       this(parent, parentRelativePath, parent.getArtifactOwner());
     }
 
@@ -619,7 +637,7 @@ public class Artifact
      */
     @AutoCodec.Instantiator
     TreeFileArtifact(
-        SpecialArtifact parentTreeArtifact, PathFragment parentRelativePath, ArtifactOwner owner) {
+        Artifact parentTreeArtifact, PathFragment parentRelativePath, ArtifactOwner owner) {
       super(
           parentTreeArtifact.getRoot(),
           parentTreeArtifact.getExecPath().getRelative(parentRelativePath),
@@ -633,6 +651,10 @@ public class Artifact
           !parentRelativePath.containsUplevelReferences() && !parentRelativePath.isAbsolute(),
           "%s is not a proper normalized relative path",
           parentRelativePath);
+      Preconditions.checkState(
+          parentTreeArtifact.isTreeArtifact(),
+          "Given parent %s must be a TreeArtifact",
+          parentTreeArtifact);
       this.parentTreeArtifact = parentTreeArtifact;
       this.parentRelativePath = parentRelativePath;
     }
@@ -662,9 +684,9 @@ public class Artifact
    */
   public final PathFragment getRunfilesPath() {
     PathFragment relativePath = rootRelativePath;
-    if (relativePath.startsWith(Label.EXTERNAL_PATH_PREFIX)) {
+    if (relativePath.startsWith(LabelConstants.EXTERNAL_PATH_PREFIX)) {
       // Turn external/repo/foo into ../repo/foo.
-      relativePath = relativePath.relativeTo(Label.EXTERNAL_PATH_PREFIX);
+      relativePath = relativePath.relativeTo(LabelConstants.EXTERNAL_PATH_PREFIX);
       relativePath = PathFragment.create("..").getRelative(relativePath);
     }
     return relativePath;

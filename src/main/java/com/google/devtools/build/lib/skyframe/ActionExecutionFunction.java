@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Function;
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -25,6 +26,7 @@ import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionCacheChecker.Token;
 import com.google.devtools.build.lib.actions.ActionCompletionEvent;
 import com.google.devtools.build.lib.actions.ActionExecutedEvent;
+import com.google.devtools.build.lib.actions.ActionExecutedEvent.ErrorTiming;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionInput;
@@ -34,6 +36,7 @@ import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.ActionInputMapSink;
 import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.actions.ActionLookupValue;
+import com.google.devtools.build.lib.actions.ActionRewoundEvent;
 import com.google.devtools.build.lib.actions.AlreadyReportedActionExecutionException;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
@@ -55,6 +58,8 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.rules.cpp.IncludeScannable;
 import com.google.devtools.build.lib.skyframe.ActionRewindStrategy.RewindPlan;
+import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor.ActionPostprocessing;
+import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -144,7 +149,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
     //
     // Additionally, if an action restarted (in the Skyframe sense) after it executed because it
     // discovered new inputs during execution, we should detect that and short-circuit.
-    boolean actionAlreadyRan = skyframeActionExecutor.probeActionExecution(action);
+    ActionExecutionState previousExecution = skyframeActionExecutor.probeActionExecution(action);
 
     // If this action was previously completed this build, then this evaluation must be happening
     // because of rewinding. Prevent any ProgressLike events from being published a second time for
@@ -189,7 +194,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
         env.getValuesOrThrow(
             inputDepKeys, MissingInputFileException.class, ActionExecutionException.class);
     try {
-      if (!actionAlreadyRan && !state.hasArtifactData()) {
+      if (previousExecution == null && !state.hasArtifactData()) {
         // Do we actually need to find our metadata?
         checkedInputs = checkInputs(env, action, inputDeps);
       }
@@ -212,7 +217,9 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
     } catch (ActionExecutionException e) {
       // Remove action from state map in case it's there (won't be unless it discovers inputs).
       stateMap.remove(action);
-      throw new ActionExecutionFunctionException(e);
+      throw new ActionExecutionFunctionException(
+          skyframeActionExecutor.processAndGetExceptionToThrow(
+              env.getListener(), null, action, e, new FileOutErr(), ErrorTiming.BEFORE_EXECUTION));
     }
     if (env.valuesMissing()) {
       return null;
@@ -242,75 +249,11 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
               env,
               clientEnv,
               actionLookupData,
-              actionAlreadyRan,
+              previousExecution,
               skyframeDepsResult,
               actionStartTime);
     } catch (LostInputsActionExecutionException e) {
-      // Remove action from state map in case it's there (won't be unless it discovers inputs).
-      stateMap.remove(action);
-
-      // Reconstruct the relationship between lost inputs and this action's direct deps if any of
-      // the lost inputs came from runfiles:
-      ActionInputDepOwners runfilesDepOwners;
-      Set<ActionInput> lostRunfiles = e.getInputOwners().getRunfilesInputsAndOwners();
-      if (!lostRunfiles.isEmpty()) {
-        try {
-          runfilesDepOwners = getInputDepOwners(env, action, inputDeps, lostRunfiles);
-        } catch (ActionExecutionException unexpected) {
-          // getInputDepOwners should not be able to throw, because it does the same work as
-          // checkInputs, so if getInputDepOwners throws then checkInputs should have thrown, and if
-          // checkInputs threw then we shouldn't have reached this point in action execution.
-          throw new IllegalStateException(unexpected);
-        }
-      } else {
-        runfilesDepOwners = ActionInputDepOwners.EMPTY_INSTANCE;
-      }
-
-      ImmutableList<Artifact> lostDiscoveredInputs = ImmutableList.of();
-      Iterable<? extends SkyKey> failedActionDeps;
-      if (e.isFromInputDiscovery()) {
-        // Lost inputs found during input discovery are necessarily artifacts, and already Skyframe
-        // deps of this action.
-        lostDiscoveredInputs =
-            e.getLostInputs().stream()
-                .map(i -> (Artifact) i)
-                .collect(ImmutableList.toImmutableList());
-        failedActionDeps = lostDiscoveredInputs;
-      } else if (state.discoveredInputs != null) {
-        failedActionDeps = Iterables.concat(inputDepKeys, state.discoveredInputs);
-      } else {
-        failedActionDeps = inputDepKeys;
-      }
-
-      RewindPlan rewindPlan;
-      try {
-        rewindPlan =
-            actionRewindStrategy.getRewindPlan(action, failedActionDeps, e, runfilesDepOwners, env);
-      } catch (ActionExecutionException rewindingFailedException) {
-        stateMap.remove(action);
-        if (e.isActionStartedEventAlreadyEmitted()) {
-          // SkyframeActionExecutor's ActionRunner didn't emit an ActionCompletionEvent because it
-          // hoped rewinding would fix things. Now we know that rewinding won't work.
-          env.getListener()
-              .post(new ActionCompletionEvent(actionStartTime, action, actionLookupData));
-        }
-        // This call to processAndGetExceptionToThrow will emit an ActionExecutedEvent and report
-        // the error. The previous call to processAndGetExceptionToThrow didn't.
-        throw new ActionExecutionFunctionException(
-            new AlreadyReportedActionExecutionException(
-                skyframeActionExecutor.processAndGetExceptionToThrow(
-                    env.getListener(),
-                    e.getPrimaryOutputPath(),
-                    action,
-                    rewindingFailedException,
-                    e.getFileOutErr(),
-                    ActionExecutedEvent.ErrorTiming.AFTER_EXECUTION)));
-      }
-      skyframeActionExecutor.resetFailedActionExecution(action, lostDiscoveredInputs);
-      for (Action actionToRestart : rewindPlan.getAdditionalActionsToRestart()) {
-        skyframeActionExecutor.resetPreviouslyCompletedActionExecution(actionToRestart);
-      }
-      return rewindPlan.getNodesToRestart();
+      return handleLostInputs(e, actionLookupData, action, actionStartTime, env, inputDeps, state);
     } catch (ActionExecutionException e) {
       // Remove action from state map in case it's there (won't be unless it discovers inputs).
       stateMap.remove(action);
@@ -373,6 +316,97 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
       }
     }
     return false;
+  }
+
+  /**
+   * Clean up state associated with the current action execution attempt and return a {@link
+   * Restart} value which rewinds the actions that generate the lost inputs.
+   */
+  private SkyFunction.Restart handleLostInputs(
+      LostInputsActionExecutionException e,
+      ActionLookupData actionLookupData,
+      Action action,
+      long actionStartTime,
+      Environment env,
+      Map<SkyKey, ValueOrException2<MissingInputFileException, ActionExecutionException>> inputDeps,
+      ContinuationState state)
+      throws InterruptedException, ActionExecutionFunctionException {
+    // Remove action from state map in case it's there (won't be unless it discovers inputs).
+    stateMap.remove(action);
+
+    RewindPlan rewindPlan = null;
+    try {
+      // Reconstruct the relationship between lost inputs and this action's direct deps if any of
+      // the lost inputs came from runfiles:
+      ActionInputDepOwners runfilesDepOwners;
+      Set<ActionInput> lostRunfiles = e.getInputOwners().getRunfilesInputsAndOwners();
+      if (!lostRunfiles.isEmpty()) {
+        try {
+          runfilesDepOwners = getInputDepOwners(env, action, inputDeps, lostRunfiles);
+        } catch (ActionExecutionException unexpected) {
+          // getInputDepOwners should not be able to throw, because it does the same work as
+          // checkInputs, so if getInputDepOwners throws then checkInputs should have thrown, and if
+          // checkInputs threw then we shouldn't have reached this point in action execution.
+          throw new IllegalStateException(unexpected);
+        }
+      } else {
+        runfilesDepOwners = ActionInputDepOwners.EMPTY_INSTANCE;
+      }
+
+      // Collect the set of direct deps of this action which may be responsible for the lost inputs,
+      // some of which may be discovered.
+      ImmutableList<Artifact> lostDiscoveredInputs = ImmutableList.of();
+      Iterable<? extends SkyKey> failedActionDeps;
+      if (e.isFromInputDiscovery()) {
+        // Lost inputs found during input discovery are necessarily artifacts. These may not be
+        // direct deps yet, but the next time this Skyframe node is evaluated they will be. See
+        // SkyframeActionExecutor's lostDiscoveredInputsMap.
+        lostDiscoveredInputs =
+            e.getLostInputs().values().stream()
+                .map(i -> (Artifact) i)
+                .collect(ImmutableList.toImmutableList());
+        failedActionDeps = lostDiscoveredInputs;
+      } else if (state.discoveredInputs != null) {
+        failedActionDeps = Iterables.concat(inputDeps.keySet(), state.discoveredInputs);
+      } else {
+        failedActionDeps = inputDeps.keySet();
+      }
+
+      try {
+        rewindPlan =
+            actionRewindStrategy.getRewindPlan(
+                action, actionLookupData, failedActionDeps, e, runfilesDepOwners, env);
+      } catch (ActionExecutionException rewindingFailedException) {
+        // This call to processAndGetExceptionToThrow will emit an ActionExecutedEvent and report
+        // the error. The previous call to processAndGetExceptionToThrow didn't.
+        throw new ActionExecutionFunctionException(
+            new AlreadyReportedActionExecutionException(
+                skyframeActionExecutor.processAndGetExceptionToThrow(
+                    env.getListener(),
+                    e.getPrimaryOutputPath(),
+                    action,
+                    rewindingFailedException,
+                    e.getFileOutErr(),
+                    ActionExecutedEvent.ErrorTiming.AFTER_EXECUTION)));
+      }
+
+      if (e.isActionStartedEventAlreadyEmitted()) {
+        env.getListener().post(new ActionRewoundEvent(actionStartTime, action));
+      }
+      skyframeActionExecutor.resetFailedActionExecution(action, lostDiscoveredInputs);
+      for (Action actionToRestart : rewindPlan.getAdditionalActionsToRestart()) {
+        skyframeActionExecutor.resetPreviouslyCompletedActionExecution(actionToRestart);
+      }
+      return rewindPlan.getNodesToRestart();
+    } finally {
+      if (rewindPlan == null && e.isActionStartedEventAlreadyEmitted()) {
+        // Rewinding was unsuccessful. SkyframeActionExecutor's ActionRunner didn't emit an
+        // ActionCompletionEvent because it hoped rewinding would fix things. Because it won't, this
+        // must emit one to compensate.
+        env.getListener()
+            .post(new ActionCompletionEvent(actionStartTime, action, actionLookupData));
+      }
+    }
   }
 
   static Action getActionForLookupData(Environment env, ActionLookupData actionLookupData)
@@ -514,20 +548,20 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
       Environment env,
       Map<String, String> clientEnv,
       ActionLookupData actionLookupData,
-      boolean actionAlreadyRan,
+      @Nullable ActionExecutionState previousAction,
       Object skyframeDepsResult,
       long actionStartTime)
       throws ActionExecutionException, InterruptedException {
-    // If this is a shared action and the other action is the one that executed, we must use that
-    // other action's value, provided here, since it is populated with metadata for the outputs.
-    if (actionAlreadyRan) {
-      return skyframeActionExecutor.executeAction(
-          env.getListener(),
-          action,
-          /* metadataHandler= */ null,
-          /* actionStartTime= */ -1,
-          /* actionExecutionContext= */ null,
-          actionLookupData);
+    if (previousAction != null) {
+      // There are two cases where we can already have an executing action for a specific output:
+      // 1. Another instance of a shared action won the race and got executed first.
+      // 2. The action was already started earlier, and this SkyFunction got restarted since
+      //    there's progress to be made.
+      // In either case, we must use this continuation to continue. Note that in the first case,
+      // we don't have any input metadata available, so we couldn't re-execute the action even if we
+      // wanted to.
+      return previousAction.getResultOrDependOnFuture(
+          env, actionLookupData, action, skyframeActionExecutor.getActionCompletedReceiver());
     }
     // The metadataHandler may be recreated if we discover inputs.
     ArtifactPathResolver pathResolver = ArtifactPathResolver.createPathResolver(
@@ -571,9 +605,6 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
     // Delete the metadataHandler's cache of the action's outputs, since they are being deleted.
     metadataHandler.discardOutputMetadata();
 
-    // This may be recreated if we discover inputs.
-    // TODO(shahan): this isn't used when using ActionFileSystem so we can avoid creating some
-    // unused objects.
     if (action.discoversInputs()) {
       if (state.discoveredInputs == null) {
         try {
@@ -586,7 +617,14 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
           }
           state.discoveredInputs =
               skyframeActionExecutor.discoverInputs(
-                  action, metadataHandler, metadataHandler, env, state.actionFileSystem);
+                  action,
+                  metadataHandler,
+                  metadataHandler,
+                  skyframeActionExecutor.probeCompletedAndReset(action)
+                      ? SkyframeActionExecutor.ProgressEventBehavior.SUPPRESS
+                      : SkyframeActionExecutor.ProgressEventBehavior.EMIT,
+                  env,
+                  state.actionFileSystem);
           Preconditions.checkState(
               env.valuesMissing() == (state.discoveredInputs == null),
               "discoverInputs() must return null iff requesting more dependencies.");
@@ -645,64 +683,77 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
       throw new ActionExecutionException(
           "Failed to update filesystem context: ", e, action, /*catastrophe=*/ false);
     }
+
     try (ActionExecutionContext actionExecutionContext =
         skyframeActionExecutor.getContext(
             metadataHandler,
             metadataHandler,
+            skyframeActionExecutor.probeCompletedAndReset(action)
+                ? SkyframeActionExecutor.ProgressEventBehavior.SUPPRESS
+                : SkyframeActionExecutor.ProgressEventBehavior.EMIT,
             Collections.unmodifiableMap(state.expandedArtifacts),
             expandedFilesets,
             topLevelFilesets,
             state.actionFileSystem,
             skyframeDepsResult)) {
-      if (!state.hasExecutedAction()) {
-        state.value =
-            skyframeActionExecutor.executeAction(
-                env.getListener(),
-                action,
-                metadataHandler,
-                actionStartTime,
-                actionExecutionContext,
-                actionLookupData);
-      }
+      return skyframeActionExecutor.executeAction(
+          env,
+          action,
+          metadataHandler,
+          actionStartTime,
+          actionExecutionContext,
+          actionLookupData,
+          new ActionPostprocessingImpl(state));
     } catch (IOException e) {
       throw new ActionExecutionException(
           "Failed to close action output", e, action, /*catastrophe=*/ false);
     }
+  }
 
-    if (action.discoversInputs()) {
-      Iterable<Artifact> newInputs = filterKnownInputs(action.getInputs(), state.inputArtifactData);
-      Map<SkyKey, SkyValue> metadataFoundDuringActionExecution =
-          env.getValues(toKeys(newInputs, action.getMandatoryInputs()));
-      state.discoveredInputs = newInputs;
-      if (env.valuesMissing()) {
-        return null;
-      }
-      if (!metadataFoundDuringActionExecution.isEmpty()) {
-        // We are in the interesting case of an action that discovered its inputs during
-        // execution, and found some new ones, but the new ones were already present in the graph.
-        // We must therefore cache the metadata for those new ones.
-        for (Map.Entry<SkyKey, SkyValue> entry : metadataFoundDuringActionExecution.entrySet()) {
-          state.inputArtifactData.putWithNoDepOwner(
-              ArtifactSkyKey.artifact(entry.getKey()), (FileArtifactValue) entry.getValue());
-        }
-        // TODO(ulfjack): This causes information loss about omitted and injected outputs. Also see
-        // the documentation on MetadataHandler.artifactOmitted. This works by accident because
-        // markOmitted is only called for remote execution, and this code only gets executed for
-        // local execution.
-        metadataHandler =
-            new ActionMetadataHandler(
-                state.inputArtifactData,
-                /*missingArtifactsAllowed=*/ false,
-                action.getOutputs(),
-                tsgm.get(),
-                pathResolver,
-                state.actionFileSystem == null ? new OutputStore() : new MinimalOutputStore());
-      }
+  /** Implementation of {@link ActionPostprocessing}. */
+  private final class ActionPostprocessingImpl implements ActionPostprocessing {
+    private final ContinuationState state;
+
+    ActionPostprocessingImpl(ContinuationState state) {
+      this.state = state;
     }
-    Preconditions.checkState(!env.valuesMissing(), action);
-    skyframeActionExecutor.afterExecution(
-        action, metadataHandler, state.token, clientEnv, actionLookupData);
-    return state.value;
+
+    public void run(
+        Environment env,
+        Action action,
+        ActionMetadataHandler metadataHandler,
+        Map<String, String> clientEnv)
+        throws InterruptedException {
+      if (action.discoversInputs()) {
+        Iterable<Artifact> newInputs =
+            filterKnownInputs(action.getInputs(), state.inputArtifactData);
+        Map<SkyKey, SkyValue> metadataFoundDuringActionExecution =
+            env.getValues(toKeys(newInputs, action.getMandatoryInputs()));
+        state.discoveredInputs = newInputs;
+        if (env.valuesMissing()) {
+          return;
+        }
+        if (!metadataFoundDuringActionExecution.isEmpty()) {
+          // We are in the interesting case of an action that discovered its inputs during
+          // execution, and found some new ones, but the new ones were already present in the graph.
+          // We must therefore cache the metadata for those new ones.
+          for (Map.Entry<SkyKey, SkyValue> entry : metadataFoundDuringActionExecution.entrySet()) {
+            state.inputArtifactData.putWithNoDepOwner(
+                ArtifactSkyKey.artifact(entry.getKey()), (FileArtifactValue) entry.getValue());
+          }
+          metadataHandler =
+              new ActionMetadataHandler(
+                  state.inputArtifactData,
+                  /*missingArtifactsAllowed=*/ false,
+                  action.getOutputs(),
+                  tsgm.get(),
+                  metadataHandler.getArtifactPathResolver(),
+                  metadataHandler.getOutputStore());
+        }
+      }
+      Preconditions.checkState(!env.valuesMissing(), action);
+      skyframeActionExecutor.updateActionCache(action, metadataHandler, state.token, clientEnv);
+    }
   }
 
   private static final Function<Artifact, SkyKey> TO_NONMANDATORY_SKYKEY =
@@ -829,7 +880,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
    * Declare dependency on all known inputs of action. Throws exception if any are known to be
    * missing. Some inputs may not yet be in the graph, in which case the builder should abort.
    */
-  private CheckInputResults checkInputs(
+  private static CheckInputResults checkInputs(
       Environment env,
       Action action,
       Map<SkyKey, ValueOrException2<MissingInputFileException, ActionExecutionException>> inputDeps)
@@ -840,7 +891,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
   /**
    * Reconstructs the relationships between lost inputs and the direct deps responsible for them.
    */
-  private ActionInputDepOwners getInputDepOwners(
+  private static ActionInputDepOwners getInputDepOwners(
       Environment env,
       Action action,
       Map<SkyKey, ValueOrException2<MissingInputFileException, ActionExecutionException>> inputDeps,
@@ -854,7 +905,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
         (actionInputMapSink, expandedArtifacts, expandedFilesets) -> actionInputMapSink);
   }
 
-  private <S extends ActionInputMapSink, R> R accumulateInputs(
+  private static <S extends ActionInputMapSink, R> R accumulateInputs(
       Environment env,
       Action action,
       Map<SkyKey, ValueOrException2<MissingInputFileException, ActionExecutionException>> inputDeps,
@@ -970,6 +1021,7 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
   public void complete() {
     // Discard all remaining state (there should be none after a successful execution).
     stateMap = Maps.newConcurrentMap();
+    actionRewindStrategy.reset();
   }
 
   private ContinuationState getState(Action action) {
@@ -1006,7 +1058,6 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
     Map<Artifact, ImmutableList<FilesetOutputSymlink>> expandedFilesets = null;
     Token token = null;
     Iterable<Artifact> discoveredInputs = null;
-    ActionExecutionValue value = null;
     FileSystem actionFileSystem = null;
 
     boolean hasCollectedInputs() {
@@ -1025,10 +1076,6 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
       return token != null;
     }
 
-    boolean hasExecutedAction() {
-      return value != null;
-    }
-
     /** Must be called to assign values to the given variables as they change. */
     void updateFileSystemContext(
         SkyframeActionExecutor executor,
@@ -1044,15 +1091,12 @@ public class ActionExecutionFunction implements SkyFunction, CompletionReceiver 
 
     @Override
     public String toString() {
-      return token
-          + ", "
-          + value
-          + ", "
-          + allInputs
-          + ", "
-          + inputArtifactData
-          + ", "
-          + discoveredInputs;
+      return MoreObjects.toStringHelper(this)
+          .add("token", token)
+          .add("allInputs", allInputs)
+          .add("inputArtifactData", inputArtifactData)
+          .add("discoveredInputs", discoveredInputs)
+          .toString();
     }
   }
 

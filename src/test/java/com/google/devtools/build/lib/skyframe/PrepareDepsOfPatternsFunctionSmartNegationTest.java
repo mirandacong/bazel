@@ -31,7 +31,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Reporter;
-import com.google.devtools.build.lib.packages.SkylarkSemanticsOptions;
+import com.google.devtools.build.lib.packages.StarlarkSemanticsOptions;
 import com.google.devtools.build.lib.pkgcache.PackageCacheOptions;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
@@ -84,7 +84,7 @@ public class PrepareDepsOfPatternsFunctionSmartNegationTest extends FoundationTe
         SequencedSkyframeExecutor.create(
             AnalysisMock.get()
                 .getPackageFactoryBuilderForTesting(directories)
-                .build(ruleClassProvider),
+                .build(ruleClassProvider, fileSystem),
             fileSystem,
             directories,
             new ActionKeyContext(),
@@ -106,8 +106,7 @@ public class PrepareDepsOfPatternsFunctionSmartNegationTest extends FoundationTe
             ImmutableList.of(Root.fromPath(rootDirectory)),
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY),
         Options.getDefaults(PackageCacheOptions.class),
-        Options.getDefaults(SkylarkSemanticsOptions.class),
-        AnalysisMock.get().getDefaultsPackageContent(),
+        Options.getDefaults(StarlarkSemanticsOptions.class),
         UUID.randomUUID(),
         ImmutableMap.<String, String>of(),
         new TimestampGranularityMonitor(null));
@@ -206,8 +205,8 @@ public class PrepareDepsOfPatternsFunctionSmartNegationTest extends FoundationTe
 
     // Then a event is published that says that negative non-TBD patterns are skipped.
     assertContainsEvent(
-        "Skipping '-//foo/bar': Negative target patterns of types other than \"targets below "
-            + "directory\" are not permitted.");
+        "Skipping '-//foo/bar, excludedSubdirs=[], filteringPolicy=[]': Negative target patterns of"
+            + " types other than \"targets below directory\" are not permitted.");
   }
 
   // Helpers:

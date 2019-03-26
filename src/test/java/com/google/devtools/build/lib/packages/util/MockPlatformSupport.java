@@ -17,15 +17,25 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import java.io.IOException;
+import javax.annotation.Nullable;
 
 /** Mocking support for platforms and toolchains. */
 public class MockPlatformSupport {
 
   /** Adds mocks for basic host and target platform. */
-  public static void setup(MockToolsConfig mockToolsConfig, String platformsPath)
+  public static void setup(MockToolsConfig mockToolsConfig, String bazelToolsPlatformsPath)
+      throws IOException {
+    setup(mockToolsConfig, bazelToolsPlatformsPath, null);
+  }
+
+  /** Adds mocks for basic host and target platform. */
+  public static void setup(
+      MockToolsConfig mockToolsConfig,
+      String bazelToolsPlatformsPath,
+      @Nullable String localConfigPlatformPath)
       throws IOException {
     mockToolsConfig.create(
-        platformsPath + "/BUILD",
+        bazelToolsPlatformsPath + "/BUILD",
         "package(default_visibility=['//visibility:public'])",
         "constraint_setting(name = 'cpu')",
         "constraint_value(",
@@ -107,10 +117,19 @@ public class MockPlatformSupport {
         "        ':windows',",
         "    ],",
         ")");
+    if (localConfigPlatformPath != null) {
+      // Only create these if the local config workspace exists.
+      mockToolsConfig.create(
+          localConfigPlatformPath + "/WORKSPACE", "workspace(name = 'local_config_platform')");
+      mockToolsConfig.create(
+          localConfigPlatformPath + "/BUILD",
+          "package(default_visibility=['//visibility:public'])",
+          "platform(name = 'host')");
+    }
   }
 
-  /** Adds a mock piii platform. */
-  public static void addMockPiiiPlatform(MockToolsConfig mockToolsConfig, Label crosstoolLabel)
+  /** Adds a mock K8 platform. */
+  public static void addMockK8Platform(MockToolsConfig mockToolsConfig, Label crosstoolLabel)
       throws Exception {
     mockToolsConfig.create(
         "mock_platform/BUILD",
@@ -118,15 +137,14 @@ public class MockPlatformSupport {
         "constraint_setting(name = 'mock_setting')",
         "constraint_value(name = 'mock_value', constraint_setting = ':mock_setting')",
         "platform(",
-        "   name = 'mock-piii-platform',",
+        "   name = 'mock-k8-platform',",
         "   constraint_values = [':mock_value'],",
         ")",
         "toolchain(",
-        "   name = 'toolchain_cc-compiler-piii',",
+        "   name = 'toolchain_cc-compiler-k8',",
         "   toolchain_type = '" + TestConstants.TOOLS_REPOSITORY + "//tools/cpp:toolchain_type',",
         "   toolchain = '"
-            + crosstoolLabel.getRelativeWithRemapping(
-                "cc-compiler-piii-compiler", ImmutableMap.of())
+            + crosstoolLabel.getRelativeWithRemapping("cc-compiler-k8-compiler", ImmutableMap.of())
             + "',",
         "   target_compatible_with = [':mock_value'],",
         ")");

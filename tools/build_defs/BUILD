@@ -1,7 +1,6 @@
 filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
-        "//tools/build_defs/apple:srcs",
         "//tools/build_defs/cc:srcs",
         "//tools/build_defs/hash:srcs",
         "//tools/build_defs/pkg:srcs",
@@ -13,11 +12,10 @@ filegroup(
 filegroup(
     name = "embedded_tools",
     srcs = glob(["**"]) + [
-        "//tools/build_defs/apple:srcs",
         "//tools/build_defs/cc:srcs",
         "//tools/build_defs/hash:srcs",
         "//tools/build_defs/pkg:srcs",
-        "//tools/build_defs/repo:srcs",
+        "//tools/build_defs/repo:embedded_tools",
     ],
     visibility = ["//tools:__pkg__"],
 )

@@ -30,9 +30,10 @@ import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.PackageFactory.EnvironmentExtension;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.WorkspaceFileValue;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
@@ -52,8 +53,8 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-import org.mockito.Matchers;
 import org.mockito.Mockito;
+import org.mockito.hamcrest.MockitoHamcrest;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
@@ -93,6 +94,11 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
       return exists;
     }
 
+    @Override
+    public ImmutableList<RootedPath> logicalChainDuringResolution() {
+      throw new UnsupportedOperationException();
+    }
+
     void setExists(boolean exists) {
       this.exists = exists;
     }
@@ -109,12 +115,14 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   @Before
   public final void setUp() throws Exception {
-    ConfiguredRuleClassProvider ruleClassProvider = TestRuleClassProvider.getRuleClassProvider();
+    ConfiguredRuleClassProvider ruleClassProvider =
+        TestRuleClassProvider.getRuleClassProvider(true);
     workspaceSkyFunc =
         new WorkspaceFileFunction(
             ruleClassProvider,
             pkgFactory,
-            directories);
+            directories,
+            /*skylarkImportLookupFunctionForInlining=*/ null);
     externalSkyFunc = new ExternalPackageFunction();
     astSkyFunc = new WorkspaceASTFunction(ruleClassProvider);
     fakeWorkspaceFileValue = new FakeFileValue();
@@ -158,9 +166,11 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   private SkyFunction.Environment getEnv() throws InterruptedException {
     SkyFunction.Environment env = Mockito.mock(SkyFunction.Environment.class);
-    Mockito.when(env.getValue(Matchers.argThat(new SkyKeyMatchers(FileValue.FILE))))
+    Mockito.when(env.getValue(MockitoHamcrest.argThat(new SkyKeyMatchers(FileValue.FILE))))
         .thenReturn(fakeWorkspaceFileValue);
-    Mockito.when(env.getValue(Matchers.argThat(new SkyKeyMatchers(SkyFunctions.WORKSPACE_FILE))))
+    Mockito.when(
+            env.getValue(
+                MockitoHamcrest.argThat(new SkyKeyMatchers(WorkspaceFileValue.WORKSPACE_FILE))))
         .then(
             new Answer<SkyValue>() {
               @Override
@@ -169,7 +179,8 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
                 return workspaceSkyFunc.compute(key, getEnv());
               }
             });
-    Mockito.when(env.getValue(Matchers.argThat(new SkyKeyMatchers(SkyFunctions.WORKSPACE_AST))))
+    Mockito.when(
+            env.getValue(MockitoHamcrest.argThat(new SkyKeyMatchers(SkyFunctions.WORKSPACE_AST))))
         .then(
             new Answer<SkyValue>() {
               @Override
@@ -178,14 +189,15 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
                 return astSkyFunc.compute(key, getEnv());
               }
             });
-    Mockito.when(env.getValue(Matchers.argThat(new SkyKeyMatchers(SkyFunctions.PRECOMPUTED))))
+    Mockito.when(
+            env.getValue(MockitoHamcrest.argThat(new SkyKeyMatchers(SkyFunctions.PRECOMPUTED))))
         .then(
             new Answer<SkyValue>() {
               @Override
               public SkyValue answer(InvocationOnMock invocation) throws Throwable {
                 SkyKey key = (SkyKey) invocation.getArguments()[0];
-                if (key.equals(PrecomputedValue.SKYLARK_SEMANTICS.getKeyForTesting())) {
-                  return new PrecomputedValue(SkylarkSemantics.DEFAULT_SEMANTICS);
+                if (key.equals(PrecomputedValue.STARLARK_SEMANTICS.getKeyForTesting())) {
+                  return new PrecomputedValue(StarlarkSemantics.DEFAULT_SEMANTICS);
                 } else if (key.equals(
                     RepositoryDelegatorFunction.RESOLVED_FILE_INSTEAD_OF_WORKSPACE
                         .getKeyForTesting())) {
@@ -257,7 +269,6 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   @Test
   public void testRepositoryMappingInChunks() throws Exception {
-    setSkylarkSemanticsOptions("--experimental_enable_repo_mapping");
     scratch.file("b.bzl", "b = 'b'");
     scratch.file("BUILD", "");
     RootedPath workspace =
@@ -297,7 +308,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   @Test
   public void testBindFunction() throws Exception {
-    String lines[] = {"bind(name = 'foo/bar',", "actual = '//foo:bar')"};
+    String[] lines = {"bind(name = 'foo/bar',", "actual = '//foo:bar')"};
     RootedPath workspacePath = createWorkspaceFile(lines);
 
     SkyKey key = ExternalPackageFunction.key(workspacePath);
@@ -310,7 +321,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   @Test
   public void testBindArgsReversed() throws Exception {
-    String lines[] = {"bind(actual = '//foo:bar', name = 'foo/bar')"};
+    String[] lines = {"bind(actual = '//foo:bar', name = 'foo/bar')"};
     RootedPath workspacePath = createWorkspaceFile(lines);
 
     SkyKey key = ExternalPackageFunction.key(workspacePath);
@@ -324,7 +335,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
   @Test
   public void testNonExternalBinding() throws Exception {
     // name must be a valid label name.
-    String lines[] = {"bind(name = 'foo:bar', actual = '//bar/baz')"};
+    String[] lines = {"bind(name = 'foo:bar', actual = '//bar/baz')"};
     RootedPath workspacePath = createWorkspaceFile(lines);
 
     PackageValue value =
@@ -338,7 +349,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
   @Test
   public void testWorkspaceFileParsingError() throws Exception {
     // //external:bar:baz is not a legal package.
-    String lines[] = {"bind(name = 'foo/bar', actual = '//external:bar:baz')"};
+    String[] lines = {"bind(name = 'foo/bar', actual = '//external:bar:baz')"};
     RootedPath workspacePath = createWorkspaceFile(lines);
 
     PackageValue value =
@@ -352,7 +363,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
   @Test
   public void testNoWorkspaceFile() throws Exception {
     // Even though the WORKSPACE exists, Skyframe thinks it doesn't, so it doesn't.
-    String lines[] = {"bind(name = 'foo/bar', actual = '//foo:bar')"};
+    String[] lines = {"bind(name = 'foo/bar', actual = '//foo:bar')"};
     RootedPath workspacePath = createWorkspaceFile(lines);
     fakeWorkspaceFileValue.setExists(false);
 
@@ -366,8 +377,9 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   @Test
   public void testListBindFunction() throws Exception {
-    String lines[] = {
-        "L = ['foo', 'bar']", "bind(name = '%s/%s' % (L[0], L[1]),", "actual = '//foo:bar')"};
+    String[] lines = {
+      "L = ['foo', 'bar']", "bind(name = '%s/%s' % (L[0], L[1]),", "actual = '//foo:bar')"
+    };
     RootedPath workspacePath = createWorkspaceFile(lines);
 
     SkyKey key = ExternalPackageFunction.key(workspacePath);

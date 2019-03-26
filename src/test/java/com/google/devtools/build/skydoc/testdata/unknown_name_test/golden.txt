@@ -1,56 +1,6 @@
-<a name="#<unknown name>"></a>
-## <unknown name>
+<!-- Generated with Stardoc: http://skydoc.bazel.build -->
 
-<pre>
-<unknown name>(<a href="#<unknown name>-name">name</a>, <a href="#<unknown name>-first">first</a>, <a href="#<unknown name>-fourth">fourth</a>, <a href="#<unknown name>-second">second</a>, <a href="#<unknown name>-third">third</a>)
-</pre>
-
-
-
-### Attributes
-
-<table class="params-table">
-  <colgroup>
-    <col class="col-param" />
-    <col class="col-description" />
-  </colgroup>
-  <tbody>
-    <tr id="<unknown name>-name">
-      <td><code>name</code></td>
-      <td>
-        <a href="https://bazel.build/docs/build-ref.html#name">Name</a>; required
-        <p>
-          A unique name for this target.
-        </p>
-      </td>
-    </tr>
-    <tr id="<unknown name>-first">
-      <td><code>first</code></td>
-      <td>
-        <a href="https://bazel.build/docs/build-ref.html#labels">Label</a>; required
-      </td>
-    </tr>
-    <tr id="<unknown name>-fourth">
-      <td><code>fourth</code></td>
-      <td>
-        Boolean; optional
-      </td>
-    </tr>
-    <tr id="<unknown name>-second">
-      <td><code>second</code></td>
-      <td>
-        <a href="https://bazel.build/docs/skylark/lib/dict.html">Dictionary: String -> String</a>; required
-      </td>
-    </tr>
-    <tr id="<unknown name>-third">
-      <td><code>third</code></td>
-      <td>
-        <a href="https://bazel.build/docs/build-ref.html#labels">Label</a>; required
-      </td>
-    </tr>
-  </tbody>
-</table>
-
+<a name="#my_rule_impl"></a>
 
 ## my_rule_impl
 
@@ -68,7 +18,7 @@ my_rule_impl(<a href="#my_rule_impl-ctx">ctx</a>)
     <col class="col-description" />
   </colgroup>
   <tbody>
-    <tr id="my_rule_impl-ctx>
+    <tr id="my_rule_impl-ctx">
       <td><code>ctx</code></td>
       <td>
         required.

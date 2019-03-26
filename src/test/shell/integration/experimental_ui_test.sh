@@ -294,7 +294,7 @@ function test_query_spacing() {
   BAZEL_QUERY_OUTPUT=`bazel query --experimental_ui 'deps(//pkg:true)'`
   echo "$BAZEL_QUERY_OUTPUT" | grep -q -v '^[@/]' \
    && fail "bazel query output is >$BAZEL_QUERY_OUTPUT<" || true
-  if ! is_windows; then
+  if ! $is_windows; then
     echo "$BAZEL_QUERY_OUTPUT" | grep -q $'\r' \
      && fail "bazel query output is >$BAZEL_QUERY_OUTPUT<" || true
   fi
@@ -480,7 +480,7 @@ function test_status_despite_output_limit {
 
 function test_error_message_despite_output_limit {
     # Verify that, even if we limit the output very strictly, we
-    # still the the final error message.
+    # still the final error message.
     bazel clean --expunge
     bazel version
     bazel build --experimental_ui --curses=yes --color=yes \

@@ -50,6 +50,7 @@ import com.google.devtools.build.lib.packages.Attribute.SkylarkComputedDefaultTe
 import com.google.devtools.build.lib.packages.Attribute.ValidityPredicate;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
+import com.google.devtools.build.lib.packages.RuleClass.Builder.ThirdPartyLicenseExistencePolicy;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory;
 import com.google.devtools.build.lib.packages.RuleClass.ExecutionPlatformConstraintsAllowed;
 import com.google.devtools.build.lib.packages.RuleFactory.BuildLangTypedAttributeValuesMap;
@@ -402,8 +403,11 @@ public class RuleClassTest extends PackageLoadingTestCase {
       attributes.get("my-labellist-attr", Type.STRING); // wrong type
       fail();
     } catch (IllegalArgumentException e) {
-      assertThat(e).hasMessage("Attribute my-labellist-attr is of type list(label) "
-          + "and not of type string in ruleA rule //testpackage:my-rule-A");
+      assertThat(e)
+          .hasMessageThat()
+          .isEqualTo(
+              "Attribute my-labellist-attr is of type list(label) "
+                  + "and not of type string in ruleA rule //testpackage:my-rule-A");
     }
   }
 
@@ -524,8 +528,8 @@ public class RuleClassTest extends PackageLoadingTestCase {
    */
   private void checkValidComputedDefault(Object expectedValue, Attribute computedDefault,
       ImmutableMap<String, Object> attrValueMap) throws Exception {
-    assertThat(computedDefault.getDefaultValueForTesting() instanceof Attribute.ComputedDefault)
-        .isTrue();
+    assertThat(computedDefault.getDefaultValueUnchecked())
+        .isInstanceOf(Attribute.ComputedDefault.class);
     Rule rule = createRule(getRuleClassWithComputedDefault(computedDefault), "myRule",
         attrValueMap, testRuleLocation);
     AttributeMap attributes = RawAttributeMapper.of(rule);
@@ -546,7 +550,7 @@ public class RuleClassTest extends PackageLoadingTestCase {
           + "declaration errors");
     } catch (IllegalArgumentException e) {
       // Expected outcome.
-      assertThat(e).hasMessage(expectedMessage);
+      assertThat(e).hasMessageThat().isEqualTo(expectedMessage);
     }
   }
 
@@ -786,7 +790,8 @@ public class RuleClassTest extends PackageLoadingTestCase {
         reporter,
         /*ast=*/ null,
         location,
-        new AttributeContainer(ruleClass));
+        new AttributeContainer(ruleClass),
+        /*checkThirdPartyRulesHaveLicenses=*/ true);
   }
 
   @Test
@@ -799,8 +804,11 @@ public class RuleClassTest extends PackageLoadingTestCase {
       childRuleClassBuilder.override(attr("attr", INTEGER));
       fail();
     } catch (IllegalStateException e) {
-      assertThat(e).hasMessage("The type of the new attribute 'int' is different from "
-          + "the original one 'string'.");
+      assertThat(e)
+          .hasMessageThat()
+          .isEqualTo(
+              "The type of the new attribute 'int' is different from "
+                  + "the original one 'string'.");
     }
   }
 
@@ -887,9 +895,10 @@ public class RuleClassTest extends PackageLoadingTestCase {
         workspaceOnly,
         outputsDefaultExecutable,
         isAnalysisTest,
+        /* hasAnalysisTestTransition=*/ false,
         /* hasFunctionTransitionWhitelist=*/ false,
+        /* ignorePackageLicenses=*/ false,
         implicitOutputsFunction,
-        /*isConfigMatcher=*/ false,
         transitionFactory,
         configuredTargetFactory,
         validityPredicate,
@@ -907,6 +916,7 @@ public class RuleClassTest extends PackageLoadingTestCase {
             .setMissingFragmentPolicy(missingFragmentPolicy)
             .build(),
         supportsConstraintChecking,
+        ThirdPartyLicenseExistencePolicy.USER_CONTROLLABLE,
         /*requiredToolchains=*/ ImmutableSet.of(),
         /*supportsPlatforms=*/ true,
         ExecutionPlatformConstraintsAllowed.PER_RULE,

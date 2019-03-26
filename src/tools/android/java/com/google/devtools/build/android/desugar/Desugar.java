@@ -57,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -243,6 +244,16 @@ class Desugar {
               + "This property has effect only if --desugar_try_with_resources_if_needed is used."
     )
     public boolean desugarTryWithResourcesOmitRuntimeClasses;
+
+    @Option(
+        name = "generate_base_classes_for_default_methods",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "If desugaring default methods, generate abstract base classes for them. "
+                + "This reduces default method stubs in hand-written subclasses.")
+    public boolean generateBaseClassesForDefaultMethods;
 
     @Option(
       name = "copy_bridges_from_classpath",
@@ -454,7 +465,12 @@ class Desugar {
           bridgeMethodReader);
 
       desugarAndWriteGeneratedClasses(
-          outputFileProvider, loader, bootclasspathReader, coreLibrarySupport);
+          outputFileProvider,
+          loader,
+          classpathReader,
+          depsCollector,
+          bootclasspathReader,
+          coreLibrarySupport);
 
       copyRuntimeClasses(outputFileProvider, coreLibrarySupport);
 
@@ -546,7 +562,9 @@ class Desugar {
       ImmutableSet.Builder<String> interfaceLambdaMethodCollector)
       throws IOException {
     for (String inputFilename : inputFiles) {
-      if ("module-info.class".equals(inputFilename)) {
+      if ("module-info.class".equals(inputFilename)
+          || (inputFilename.endsWith("/module-info.class")
+              && Pattern.matches("META-INF/versions/[0-9]+/module-info.class", inputFilename))) {
         continue;  // Drop module-info.class since it has no meaning on Android
       }
       if (OutputFileProvider.DESUGAR_DEPS_FILENAME.equals(inputFilename)) {
@@ -586,7 +604,26 @@ class Desugar {
             outputFileProvider.write(filename, writer.toByteArray());
           }
         } else {
-          outputFileProvider.copyFrom(inputFilename, inputFiles);
+          // Most other files (and directories) we want to just copy, but...
+          String outputFilename = inputFilename;
+          if (options.coreLibrary && coreLibrarySupport != null && inputFilename.endsWith("/")) {
+            // rename core library directories together with files in them
+            outputFilename = coreLibrarySupport.renameCoreLibrary(inputFilename);
+          } else if (coreLibrarySupport != null
+              && !inputFilename.endsWith("/")
+              && inputFilename.startsWith("META-INF/services/")) {
+            // rename j.u.ServiceLoader files for renamed core libraries so they're found
+            String serviceName = inputFilename.substring("META-INF/services/".length());
+            if (!serviceName.contains("/")
+                && coreLibrarySupport.isRenamedCoreLibrary(serviceName.replace('.', '/'))) {
+              outputFilename =
+                  "META-INF/services/"
+                      + coreLibrarySupport
+                          .renameCoreLibrary(serviceName.replace('.', '/'))
+                          .replace('/', '.');
+            }
+          }
+          outputFileProvider.copyFrom(inputFilename, inputFiles, outputFilename);
         }
       }
     }
@@ -655,6 +692,8 @@ class Desugar {
   private void desugarAndWriteGeneratedClasses(
       OutputFileProvider outputFileProvider,
       ClassLoader loader,
+      @Nullable ClassReaderFactory classpathReader,
+      DependencyCollector depsCollector,
       ClassReaderFactory bootclasspathReader,
       @Nullable CoreLibrarySupport coreLibrarySupport)
       throws IOException {
@@ -699,6 +738,19 @@ class Desugar {
       }
 
       visitor = new Java7Compatibility(visitor, (ClassReaderFactory) null, bootclasspathReader);
+      if (options.generateBaseClassesForDefaultMethods) {
+        // Use DefaultMethodClassFixer to make generated base classes extend other base classes if
+        // possible and add any stubs from extended interfaces
+        visitor =
+            new DefaultMethodClassFixer(
+                visitor,
+                /*useGeneratedBaseClasses=*/ true,
+                classpathReader,
+                depsCollector,
+                coreLibrarySupport,
+                bootclasspathReader,
+                loader);
+      }
       generated.getValue().accept(visitor);
       checkState(
           (options.coreLibrary && coreLibrarySupport != null)
@@ -757,6 +809,7 @@ class Desugar {
         visitor =
             new DefaultMethodClassFixer(
                 visitor,
+                options.generateBaseClassesForDefaultMethods,
                 classpathReader,
                 depsCollector,
                 coreLibrarySupport,
@@ -765,6 +818,7 @@ class Desugar {
         visitor =
             new InterfaceDesugaring(
                 visitor,
+                options.generateBaseClassesForDefaultMethods,
                 interfaceCache,
                 depsCollector,
                 coreLibrarySupport,
@@ -839,6 +893,7 @@ class Desugar {
           visitor =
               new DefaultMethodClassFixer(
                   visitor,
+                  options.generateBaseClassesForDefaultMethods,
                   classpathReader,
                   depsCollector,
                   coreLibrarySupport,
@@ -847,6 +902,7 @@ class Desugar {
           visitor =
               new InterfaceDesugaring(
                   visitor,
+                  options.generateBaseClassesForDefaultMethods,
                   interfaceCache,
                   depsCollector,
                   coreLibrarySupport,

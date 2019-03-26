@@ -39,6 +39,7 @@ import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.cache.MetadataInjector;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
@@ -46,6 +47,7 @@ import com.google.devtools.build.lib.exec.util.SpawnBuilder;
 import com.google.devtools.build.lib.shell.JavaSubprocessFactory;
 import com.google.devtools.build.lib.shell.Subprocess;
 import com.google.devtools.build.lib.shell.SubprocessBuilder;
+import com.google.devtools.build.lib.shell.SubprocessBuilder.StreamAction;
 import com.google.devtools.build.lib.shell.SubprocessFactory;
 import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -257,6 +259,11 @@ public class LocalSpawnRunnerTest {
     public void report(ProgressStatus state, String name) {
       reportedStatus.add(state);
     }
+
+    @Override
+    public MetadataInjector getMetadataInjector() {
+      throw new UnsupportedOperationException();
+    }
   }
 
   private final MetadataProvider mockFileCache = mock(MetadataProvider.class);
@@ -278,7 +285,7 @@ public class LocalSpawnRunnerTest {
 
   private FileSystem setupEnvironmentForFakeExecution() {
     // Prevent any subprocess execution at all.
-    SubprocessBuilder.setSubprocessFactory(new SubprocessInterceptor());
+    SubprocessBuilder.setDefaultSubprocessFactory(new SubprocessInterceptor());
     resourceManager.setAvailableResources(
         ResourceSet.create(/*memoryMb=*/1, /*cpuUsage=*/1, /*localTestCount=*/1));
     return new InMemoryFileSystem();
@@ -291,7 +298,7 @@ public class LocalSpawnRunnerTest {
    */
   @Before
   public final void setupEnvironmentForRealExecution() {
-    SubprocessBuilder.setSubprocessFactory(JavaSubprocessFactory.INSTANCE);
+    SubprocessBuilder.setDefaultSubprocessFactory(JavaSubprocessFactory.INSTANCE);
     resourceManager.setAvailableResources(LocalHostCapacity.getLocalHostCapacity());
   }
 
@@ -307,7 +314,7 @@ public class LocalSpawnRunnerTest {
     SubprocessFactory factory = mock(SubprocessFactory.class);
     ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
     when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     options.localSigkillGraceSeconds = 456;
@@ -338,12 +345,14 @@ public class LocalSpawnRunnerTest {
                 "/embedded_bin/process-wrapper",
                 "--timeout=123",
                 "--kill_delay=456",
-                "--stdout=/out/stdout",
-                "--stderr=/out/stderr",
                 "/bin/echo",
                 "Hi!"));
     assertThat(captor.getValue().getEnv()).containsExactly("VARIABLE", "value");
     assertThat(captor.getValue().getTimeoutMillis()).isEqualTo(0);
+    assertThat(captor.getValue().getStdout()).isEqualTo(StreamAction.REDIRECT);
+    assertThat(captor.getValue().getStdoutFile()).isEqualTo(new File("/out/stdout"));
+    assertThat(captor.getValue().getStderr()).isEqualTo(StreamAction.REDIRECT);
+    assertThat(captor.getValue().getStderrFile()).isEqualTo(new File("/out/stderr"));
 
     assertThat(policy.lockOutputFilesCalled).isTrue();
     assertThat(policy.reportedStatus)
@@ -361,7 +370,7 @@ public class LocalSpawnRunnerTest {
 
     SubprocessFactory factory = mock(SubprocessFactory.class);
     when(factory.create(any())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     options.localSigkillGraceSeconds = 456;
@@ -411,7 +420,7 @@ public class LocalSpawnRunnerTest {
     SubprocessFactory factory = mock(SubprocessFactory.class);
     ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
     when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     options.localSigkillGraceSeconds = 456;
@@ -457,7 +466,7 @@ public class LocalSpawnRunnerTest {
     SubprocessFactory factory = mock(SubprocessFactory.class);
     ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
     when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(3));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     LocalSpawnRunner runner =
@@ -487,11 +496,13 @@ public class LocalSpawnRunnerTest {
                 "/embedded_bin/process-wrapper",
                 "--timeout=0",
                 "--kill_delay=15",
-                "--stdout=/out/stdout",
-                "--stderr=/out/stderr",
                 "/bin/echo",
                 "Hi!"));
     assertThat(captor.getValue().getEnv()).containsExactly("VARIABLE", "value");
+    assertThat(captor.getValue().getStdout()).isEqualTo(StreamAction.REDIRECT);
+    assertThat(captor.getValue().getStdoutFile()).isEqualTo(new File("/out/stdout"));
+    assertThat(captor.getValue().getStderr()).isEqualTo(StreamAction.REDIRECT);
+    assertThat(captor.getValue().getStderrFile()).isEqualTo(new File("/out/stderr"));
 
     assertThat(policy.lockOutputFilesCalled).isTrue();
   }
@@ -503,7 +514,7 @@ public class LocalSpawnRunnerTest {
     SubprocessFactory factory = mock(SubprocessFactory.class);
     ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
     when(factory.create(captor.capture())).thenThrow(new IOException("I'm sorry, Dave"));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     LocalSpawnRunner runner =
@@ -590,7 +601,7 @@ public class LocalSpawnRunnerTest {
         }
       }
     });
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     LocalSpawnRunner runner =
@@ -622,7 +633,7 @@ public class LocalSpawnRunnerTest {
 
     SubprocessFactory factory = mock(SubprocessFactory.class);
     when(factory.create(any())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     LocalSpawnRunner runner =
@@ -649,7 +660,7 @@ public class LocalSpawnRunnerTest {
 
     SubprocessFactory factory = mock(SubprocessFactory.class);
     when(factory.create(any())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     LocalSpawnRunner runner =
@@ -679,7 +690,7 @@ public class LocalSpawnRunnerTest {
 
     SubprocessFactory factory = mock(SubprocessFactory.class);
     when(factory.create(any())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
     LocalEnvProvider localEnvProvider = mock(LocalEnvProvider.class);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
@@ -718,7 +729,7 @@ public class LocalSpawnRunnerTest {
     SubprocessFactory factory = mock(SubprocessFactory.class);
     ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
     when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(0));
-    SubprocessBuilder.setSubprocessFactory(factory);
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
     options.localSigkillGraceSeconds = 654;
@@ -747,8 +758,6 @@ public class LocalSpawnRunnerTest {
                 "/embedded_bin/process-wrapper.exe",
                 "--timeout=321",
                 "--kill_delay=654",
-                "--stdout=/out/stdout",
-                "--stderr=/out/stderr",
                 "/bin/echo",
                 "Hi!"));
   }
@@ -873,7 +882,7 @@ public class LocalSpawnRunnerTest {
                 String.valueOf(minimumSystemTimeToSpend.getSeconds()))
             .build();
 
-    FileOutErr fileOutErr = new FileOutErr();
+    FileOutErr fileOutErr = new FileOutErr(fs.getPath("/dev/null"), fs.getPath("/dev/null"));
     SpawnExecutionContextForTesting policy = new SpawnExecutionContextForTesting(fileOutErr);
 
     SpawnResult spawnResult = runner.execAsync(spawn, policy).get();
@@ -936,7 +945,7 @@ public class LocalSpawnRunnerTest {
                 String.valueOf(minimumSystemTimeToSpend.getSeconds()))
             .build();
 
-    FileOutErr fileOutErr = new FileOutErr();
+    FileOutErr fileOutErr = new FileOutErr(fs.getPath("/dev/null"), fs.getPath("/dev/null"));
     SpawnExecutionContextForTesting policy = new SpawnExecutionContextForTesting(fileOutErr);
 
     SpawnResult spawnResult = runner.execAsync(spawn, policy).get();
@@ -954,5 +963,40 @@ public class LocalSpawnRunnerTest {
     assertThat(spawnResult.getNumBlockOutputOperations()).isEmpty();
     assertThat(spawnResult.getNumBlockInputOperations()).isEmpty();
     assertThat(spawnResult.getNumInvoluntaryContextSwitches()).isEmpty();
+  }
+
+  // Check that relative paths in the Spawn are absolutized relative to the execroot passed to the
+  // LocalSpawnRunner.
+  @Test
+  public void relativePath() throws Exception {
+    // TODO(#3536): Make this test work on Windows.
+    // The Command API implicitly absolutizes the path, and we get weird paths on Windows:
+    // T:\execroot\execroot\_bin\process-wrapper
+    assumeTrue(OS.getCurrent() != OS.WINDOWS);
+
+    FileSystem fs = setupEnvironmentForFakeExecution();
+
+    SubprocessFactory factory = mock(SubprocessFactory.class);
+    ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
+    when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(0));
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
+
+    LocalSpawnRunner runner =
+        new TestedLocalSpawnRunner(
+            fs.getPath("/execroot"),
+            fs.getPath("/embedded_bin"),
+            Options.getDefaults(LocalExecutionOptions.class),
+            resourceManager,
+            NO_WRAPPER,
+            OS.LINUX,
+            LocalEnvProvider.UNMODIFIED);
+
+    FileOutErr fileOutErr = new FileOutErr(fs.getPath("/out/stdout"), fs.getPath("/out/stderr"));
+    SpawnExecutionContextForTesting policy = new SpawnExecutionContextForTesting(fileOutErr);
+    assertThat(fs.getPath("/execroot").createDirectory()).isTrue();
+    runner.execAsync(new SpawnBuilder("foo/bar", "Hi!").build(), policy).get();
+    verify(factory).create(any(SubprocessBuilder.class));
+
+    assertThat(captor.getValue().getArgv()).containsExactly("/execroot/foo/bar", "Hi!");
   }
 }

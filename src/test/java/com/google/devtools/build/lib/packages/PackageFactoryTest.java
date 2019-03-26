@@ -25,8 +25,10 @@ import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.packages.PackageFactory.GlobPatternExtractor;
 import com.google.devtools.build.lib.packages.util.PackageFactoryApparatus;
 import com.google.devtools.build.lib.packages.util.PackageFactoryTestBase;
+import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.testutil.TestUtils;
@@ -239,6 +241,14 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
   }
 
   @Test
+  public void testPackageConstantIsForbidden() throws Exception {
+    events.setFailFast(false);
+    Path buildFile = scratch.file("/pina/BUILD", "cc_library(name=PACKAGE_NAME + '-colada')");
+    packages.createPackage("pina", RootedPath.toRootedPath(root, buildFile));
+    events.assertContainsError("The value 'PACKAGE_NAME' has been removed");
+  }
+
+  @Test
   public void testPackageNameFunction() throws Exception {
     Path buildFile = scratch.file("/pina/BUILD", "cc_library(name=package_name() + '-colada')");
 
@@ -248,6 +258,19 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
     assertThat(pkg.getRule("pina-colada")).isNotNull();
     assertThat(pkg.getRule("pina-colada").containsErrors()).isFalse();
     assertThat(Sets.newHashSet(pkg.getTargets(Rule.class)).size()).isSameAs(1);
+  }
+
+  @Test
+  public void testPackageConstantInExternalRepositoryIsForbidden() throws Exception {
+    events.setFailFast(false);
+    Path buildFile =
+        scratch.file(
+            "/external/a/b/BUILD", "genrule(name='c', srcs=[], outs=['ao'], cmd=REPOSITORY_NAME)");
+    packages.createPackage(
+        PackageIdentifier.create("@a", PathFragment.create("b")),
+        RootedPath.toRootedPath(root, buildFile),
+        events.reporter());
+    events.assertContainsError("The value 'REPOSITORY_NAME' has been removed");
   }
 
   @Test
@@ -333,7 +356,8 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
       fail();
     } catch (NoSuchTargetException e) {
       assertThat(e)
-          .hasMessage(
+          .hasMessageThat()
+          .isEqualTo(
               "no such target '//foo:A': "
                   + "target 'A' not declared in package 'foo' defined by /foo/BUILD");
     }
@@ -496,7 +520,8 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
       fail();
     } catch (NoSuchTargetException e) {
       assertThat(e)
-          .hasMessage(
+          .hasMessageThat()
+          .isEqualTo(
               "no such target '//x:y.cc': "
                   + "target 'y.cc' not declared in package 'x'; "
                   + "however, a source file of this name exists.  "
@@ -509,7 +534,8 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
       fail();
     } catch (NoSuchTargetException e) {
       assertThat(e)
-          .hasMessage(
+          .hasMessageThat()
+          .isEqualTo(
               "no such target '//x:z.cc': "
                   + "target 'z.cc' not declared in package 'x' (did you mean 'x.cc'?) "
                   + "defined by /x/BUILD");
@@ -520,7 +546,8 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
       fail();
     } catch (NoSuchTargetException e) {
       assertThat(e)
-          .hasMessage(
+          .hasMessageThat()
+          .isEqualTo(
               "no such target '//x:dir': target 'dir' not declared in package 'x'; "
                   + "however, a source directory of this name exists.  "
                   + "(Perhaps add 'exports_files([\"dir\"])' to x/BUILD, "
@@ -728,7 +755,9 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
           /* excludeDirs= */ true);
       fail();
     } catch (IllegalArgumentException e) {
-      assertThat(e).hasMessage("ERROR /globs/BUILD:2:73: name 'this_will_fail' is not defined");
+      assertThat(e)
+          .hasMessageThat()
+          .isEqualTo("ERROR /globs/BUILD:2:73: name 'this_will_fail' is not defined");
     }
   }
 
@@ -821,6 +850,29 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
         NoSuchPackageException.class,
         () -> packages.eval("pkg", RootedPath.toRootedPath(root, file)));
     events.assertContainsError("Directory is not readable");
+  }
+
+  @Test
+  public void testNativeModuleIsAvailable() throws Exception {
+    Path buildFile = scratch.file("/pkg/BUILD", "native.cc_library(name='bar')");
+    Package pkg =
+        packages.createPackage(
+            "pkg",
+            RootedPath.toRootedPath(root, buildFile),
+            "--incompatible_disallow_native_in_build_file=false");
+    assertThat(pkg.containsErrors()).isFalse();
+  }
+
+  @Test
+  public void testNativeModuleIsDisabled() throws Exception {
+    events.setFailFast(false);
+    Path buildFile = scratch.file("/pkg/BUILD", "native.cc_library(name='bar')");
+    Package pkg =
+        packages.createPackage(
+            "pkg",
+            RootedPath.toRootedPath(root, buildFile),
+            "--incompatible_disallow_native_in_build_file=true");
+    assertThat(pkg.containsErrors()).isTrue();
   }
 
   @Test
@@ -1206,5 +1258,26 @@ public class PackageFactoryTest extends PackageFactoryTestBase {
   @Override
   protected String getPathPrefix() {
     return "";
+  }
+
+  @Test
+  public void testGlobPatternExtractor() {
+    GlobPatternExtractor globPatternExtractor = new GlobPatternExtractor();
+    globPatternExtractor.visit(
+        BuildFileAST.parseString(
+            event -> {
+              throw new IllegalArgumentException(event.getMessage());
+            },
+            "pattern = '*'",
+            "some_variable = glob([",
+            "  '**/*',",
+            "  'a' + 'b',",
+            "  pattern,",
+            "])",
+            "other_variable = glob(include = ['a'], exclude = ['b'])",
+            "third_variable = glob(['c'], exclude_directories = 0)"));
+    assertThat(globPatternExtractor.getExcludeDirectoriesPatterns())
+        .containsExactly("ab", "a", "**/*");
+    assertThat(globPatternExtractor.getIncludeDirectoriesPatterns()).containsExactly("c");
   }
 }

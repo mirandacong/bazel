@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.analysis.AnalysisUtils;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
+import com.google.devtools.build.lib.analysis.Runfiles.Builder;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.LauncherFileWriteAction;
@@ -44,6 +45,8 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Compression;
 import com.google.devtools.build.lib.rules.java.JavaCcLinkParamsProvider;
@@ -63,6 +66,8 @@ import com.google.devtools.build.lib.rules.java.JavaTargetAttributes;
 import com.google.devtools.build.lib.rules.java.JavaToolchainProvider;
 import com.google.devtools.build.lib.rules.java.JavaUtil;
 import com.google.devtools.build.lib.rules.java.proto.GeneratedExtensionRegistryProvider;
+import com.google.devtools.build.lib.shell.ShellUtils;
+import com.google.devtools.build.lib.shell.ShellUtils.TokenizationException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.OS;
@@ -264,8 +269,15 @@ public class BazelJavaSemantics implements JavaSemantics {
       String javaStartClass,
       String javaExecutable) {
     return createStubAction(
-        ruleContext, javaCommon, jvmFlags, executable, javaStartClass, "",
-        NestedSetBuilder.<Artifact>stableOrder(), javaExecutable);
+        ruleContext,
+        javaCommon,
+        jvmFlags,
+        executable,
+        javaStartClass,
+        "",
+        NestedSetBuilder.<Artifact>stableOrder(),
+        javaExecutable,
+        /* createCoverageMetadataJar= */ true);
   }
 
   @Override
@@ -277,7 +289,8 @@ public class BazelJavaSemantics implements JavaSemantics {
       String javaStartClass,
       String coverageStartClass,
       NestedSetBuilder<Artifact> filesBuilder,
-      String javaExecutable) {
+      String javaExecutable,
+      boolean createCoverageMetadataJar) {
     Preconditions.checkState(ruleContext.getConfiguration().hasFragment(JavaConfiguration.class));
 
     Preconditions.checkNotNull(jvmFlags);
@@ -340,21 +353,30 @@ public class BazelJavaSemantics implements JavaSemantics {
 
     if (ruleContext.getConfiguration().isCodeCoverageEnabled()
         && ruleContext.getConfiguration().isExperimentalJavaCoverage()) {
-      Artifact runtimeClassPathArtifact = ruleContext.getUniqueDirectoryArtifact(
-          "coverage_runtime_classpath",
-          "runtime-classpath.txt",
-          ruleContext.getBinOrGenfilesDirectory());
-      ruleContext.registerAction(new LazyWritePathsFileAction(
-          ruleContext.getActionOwner(),
-          runtimeClassPathArtifact,
-          javaCommon.getRuntimeClasspath(),
-          true));
-      filesBuilder.add(runtimeClassPathArtifact);
-      arguments.add(Substitution.of(
-          JavaSemantics.JACOCO_METADATA_PLACEHOLDER,
-          "export JACOCO_METADATA_JAR=${JAVA_RUNFILES}/" + workspacePrefix + "/"
-              + runtimeClassPathArtifact.getRootRelativePathString()
-      ));
+      if (createCoverageMetadataJar) {
+        Artifact runtimeClassPathArtifact =
+            ruleContext.getUniqueDirectoryArtifact(
+                "coverage_runtime_classpath",
+                "runtime-classpath.txt",
+                ruleContext.getBinOrGenfilesDirectory());
+        ruleContext.registerAction(
+            new LazyWritePathsFileAction(
+                ruleContext.getActionOwner(),
+                runtimeClassPathArtifact,
+                javaCommon.getRuntimeClasspath(),
+                true));
+        filesBuilder.add(runtimeClassPathArtifact);
+        arguments.add(
+            Substitution.of(
+                JavaSemantics.JACOCO_METADATA_PLACEHOLDER,
+                "export JACOCO_METADATA_JAR=${JAVA_RUNFILES}/"
+                    + workspacePrefix
+                    + "/"
+                    + runtimeClassPathArtifact.getRootRelativePathString()));
+      } else {
+        // Remove the placeholder in the stub otherwise bazel coverage fails.
+        arguments.add(Substitution.of(JavaSemantics.JACOCO_METADATA_PLACEHOLDER, ""));
+      }
       arguments.add(Substitution.of(
           JavaSemantics.JACOCO_MAIN_CLASS_PLACEHOLDER,
           "export JACOCO_MAIN_CLASS=" + coverageStartClass));
@@ -363,6 +385,10 @@ public class BazelJavaSemantics implements JavaSemantics {
           "export JACOCO_JAVA_RUNFILES_ROOT=${JAVA_RUNFILES}/" + workspacePrefix)
       );
       arguments.add(
+          Substitution.of(
+              JavaSemantics.JAVA_COVERAGE_NEW_IMPLEMENTATION_PLACEHOLDER,
+              "export JAVA_COVERAGE_NEW_IMPLEMENTATION=YES"));
+      arguments.add(
           Substitution.of("%java_start_class%", ShellEscaper.escapeString(javaStartClass)));
     } else {
       arguments.add(Substitution.of(JavaSemantics.JACOCO_METADATA_PLACEHOLDER,
@@ -370,6 +396,10 @@ public class BazelJavaSemantics implements JavaSemantics {
               ? "export JACOCO_METADATA_JAR=" + path : ""));
       arguments.add(Substitution.of(JavaSemantics.JACOCO_MAIN_CLASS_PLACEHOLDER, ""));
       arguments.add(Substitution.of(JavaSemantics.JACOCO_JAVA_RUNFILES_ROOT_PLACEHOLDER, ""));
+      arguments.add(
+          Substitution.of(
+              JavaSemantics.JAVA_COVERAGE_NEW_IMPLEMENTATION_PLACEHOLDER,
+              "export JAVA_COVERAGE_NEW_IMPLEMENTATION=NO"));
     }
 
     arguments.add(Substitution.of("%java_start_class%",
@@ -379,13 +409,32 @@ public class BazelJavaSemantics implements JavaSemantics {
     arguments.add(Substitution.ofSpaceSeparatedList("%jvm_flags%", jvmFlagsList));
 
     if (OS.getCurrent() == OS.WINDOWS) {
+      boolean windowsEscapeJvmFlags =
+          ruleContext
+              .getConfiguration()
+              .getFragment(JavaConfiguration.class)
+              .windowsEscapeJvmFlags();
+
+      List<String> jvmFlagsForLauncher = jvmFlagsList;
+      if (windowsEscapeJvmFlags) {
+        try {
+          jvmFlagsForLauncher = new ArrayList<>(jvmFlagsList.size());
+          for (String f : jvmFlagsList) {
+            ShellUtils.tokenize(jvmFlagsForLauncher, f);
+          }
+        } catch (TokenizationException e) {
+          ruleContext.attributeError("jvm_flags", "could not Bash-tokenize flag: " + e);
+        }
+      }
+
       return createWindowsExeLauncher(
           ruleContext,
           javaExecutable,
           classpath,
           javaStartClass,
-          jvmFlagsList,
-          executable);
+          jvmFlagsForLauncher,
+          executable,
+          windowsEscapeJvmFlags);
     }
 
     ruleContext.registerAction(new TemplateExpansionAction(
@@ -398,9 +447,9 @@ public class BazelJavaSemantics implements JavaSemantics {
       String javaExecutable,
       NestedSet<Artifact> classpath,
       String javaStartClass,
-      ImmutableList<String> jvmFlags,
-      Artifact javaLauncher) {
-
+      List<String> jvmFlags,
+      Artifact javaLauncher,
+      boolean windowsEscapeJvmFlags) {
     LaunchInfo launchInfo =
         LaunchInfo.builder()
             .addKeyValuePair("binary_type", "Java")
@@ -420,7 +469,12 @@ public class BazelJavaSemantics implements JavaSemantics {
                 "classpath",
                 ";",
                 Iterables.transform(classpath, Artifact.ROOT_RELATIVE_PATH_STRING))
-            .addJoinedValues("jvm_flags", " ", jvmFlags)
+            .addKeyValuePair("escape_jvmflags", windowsEscapeJvmFlags ? "1" : "0")
+            // TODO(laszlocsomor): Change the Launcher to accept multiple jvm_flags entries. As of
+            // 2019-02-13 the Launcher accepts just one jvm_flags entry, which contains all the
+            // flags, joined by TAB characters. The Launcher splits up the string to get the
+            // individual jvm_flags. This approach breaks with flags that contain a TAB character.
+            .addJoinedValues("jvm_flags", "\t", jvmFlags)
             .build();
 
     LauncherFileWriteAction.createAndRegister(ruleContext, javaLauncher, launchInfo);
@@ -760,10 +814,12 @@ public class BazelJavaSemantics implements JavaSemantics {
       JavaCommon common,
       DeployArchiveBuilder deployArchiveBuilder,
       DeployArchiveBuilder unstrippedDeployArchiveBuilder,
-      Runfiles.Builder runfilesBuilder,
+      Builder runfilesBuilder,
       List<String> jvmFlags,
       JavaTargetAttributes.Builder attributesBuilder,
-      boolean shouldStrip) {
+      boolean shouldStrip,
+      CcToolchainProvider ccToolchain,
+      FeatureConfiguration featureConfiguration) {
     Artifact launcher = JavaHelper.launcherArtifactForTarget(this, ruleContext);
     return new Pair<>(launcher, launcher);
   }

@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.query2;
 
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.collect.compacthashset.CompactHashSet;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.query2.engine.Callback;
@@ -28,7 +28,7 @@ import java.util.Collection;
 import java.util.Set;
 
 /** A helper class that computes 'rbuildfiles(<blah>)' via BFS. */
-class RBuildFilesVisitor extends AbstractSkyKeyParallelVisitor<Target> {
+public class RBuildFilesVisitor extends AbstractSkyKeyParallelVisitor<Target> {
 
   // Each target in the full output of 'rbuildfiles' corresponds to BUILD file InputFile of a
   // unique package. So the processResultsBatchSize we choose to pass to the ParallelVisitor ctor
@@ -36,38 +36,44 @@ class RBuildFilesVisitor extends AbstractSkyKeyParallelVisitor<Target> {
   // deal with at once. A value of 100 was chosen experimentally.
   private static final int PROCESS_RESULTS_BATCH_SIZE = 100;
   private static final SkyKey EXTERNAL_PACKAGE_KEY =
-      PackageValue.key(Label.EXTERNAL_PACKAGE_IDENTIFIER);
+      PackageValue.key(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER);
   private final SkyQueryEnvironment env;
   private final QueryExpressionContext<Target> context;
+  protected final Uniquifier<SkyKey> resultUniquifier;
 
-  RBuildFilesVisitor(
+  public RBuildFilesVisitor(
       SkyQueryEnvironment env,
-      Uniquifier<SkyKey> uniquifier,
+      Uniquifier<SkyKey> visitUniquifier,
+      Uniquifier<SkyKey> resultUniquifier,
       QueryExpressionContext<Target> context,
       Callback<Target> callback) {
-    super(uniquifier, callback, ParallelSkyQueryUtils.VISIT_BATCH_SIZE, PROCESS_RESULTS_BATCH_SIZE);
+    super(
+        visitUniquifier,
+        callback,
+        ParallelSkyQueryUtils.VISIT_BATCH_SIZE,
+        PROCESS_RESULTS_BATCH_SIZE);
     this.env = env;
+    this.resultUniquifier = resultUniquifier;
     this.context = context;
   }
 
   @Override
-  protected Visit getVisitResult(Iterable<SkyKey> values) throws InterruptedException {
+  protected Visit getVisitResult(Iterable<SkyKey> values)
+      throws QueryException, InterruptedException {
     Collection<Iterable<SkyKey>> reverseDeps = env.graph.getReverseDeps(values).values();
     Set<SkyKey> keysToUseForResult = CompactHashSet.create();
     Set<SkyKey> keysToVisitNext = CompactHashSet.create();
     for (SkyKey rdep : Iterables.concat(reverseDeps)) {
       if (rdep.functionName().equals(SkyFunctions.PACKAGE)) {
-        keysToUseForResult.add(rdep);
+        if (resultUniquifier.unique(rdep)) {
+          keysToUseForResult.add(rdep);
+        }
         // Every package has a dep on the external package, so we need to include those edges too.
         if (rdep.equals(EXTERNAL_PACKAGE_KEY)) {
           keysToVisitNext.add(rdep);
         }
-      } else if (!rdep.functionName().equals(SkyFunctions.PACKAGE_LOOKUP)
-          && !rdep.functionName().equals(SkyFunctions.GLOB)) {
-        // Packages may depend on the existence of subpackages, but these edges aren't relevant to
-        // rbuildfiles. They may also depend on files transitively through globs, but these cannot
-        // be included in load statements and so we don't traverse through these either.
-        keysToVisitNext.add(rdep);
+      } else {
+        processNonPackageRdepAndDetermineVisitations(rdep, keysToVisitNext, keysToUseForResult);
       }
     }
     return new Visit(keysToUseForResult, keysToVisitNext);
@@ -84,5 +90,18 @@ class RBuildFilesVisitor extends AbstractSkyKeyParallelVisitor<Target> {
   @Override
   protected Iterable<SkyKey> preprocessInitialVisit(Iterable<SkyKey> keys) {
     return keys;
+  }
+
+  protected void processNonPackageRdepAndDetermineVisitations(
+      SkyKey rdep, Set<SkyKey> keysToVisitNext, Set<SkyKey> keysToUseForResult)
+      throws QueryException {
+    // Packages may depend on the existence of subpackages, but these edges aren't
+    // relevant to rbuildfiles. They may also depend on files transitively through
+    // globs, but these cannot be included in load statements and so we don't traverse
+    // through these either.
+    if (!rdep.functionName().equals(SkyFunctions.PACKAGE_LOOKUP)
+        && !rdep.functionName().equals(SkyFunctions.GLOB)) {
+      keysToVisitNext.add(rdep);
+    }
   }
 }

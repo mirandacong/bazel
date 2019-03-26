@@ -34,7 +34,7 @@ import com.google.devtools.build.lib.syntax.SkylarkIndexable;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics.FlagIdentifier;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics.FlagIdentifier;
 import java.util.Map;
 import javax.annotation.Nullable;
 
@@ -138,14 +138,13 @@ public interface SkylarkRuleContextApi extends SkylarkValue {
           + "</a>, there is a field named <code>\"executable\"</code>, which is the default "
           + "executable. It is recommended that instead of using this, you pass another file "
           + "(either predeclared or not) to the <code>executable</code> arg of "
-          + "<a href='globals.html#DefaultInfo'><code>DefaultInfo</code></a>."
+          + "<a href='DefaultInfo.html'><code>DefaultInfo</code></a>."
           + "</ul>";
 
   @SkylarkCallable(
-    name = "default_provider",
-    structField = true,
-    doc = "Deprecated. Use <a href=\"globals.html#DefaultInfo\">DefaultInfo</a> instead."
-  )
+      name = "default_provider",
+      structField = true,
+      doc = "Deprecated. Use <a href=\"DefaultInfo.html\">DefaultInfo</a> instead.")
   public ProviderApi getDefaultProvider();
 
   @SkylarkCallable(
@@ -1017,4 +1016,27 @@ public interface SkylarkRuleContextApi extends SkylarkValue {
       Location loc,
       Environment env)
       throws EvalException;
+
+  @SkylarkCallable(
+      name = "resolve_tools",
+      doc =
+          "Returns a tuple <code>(inputs, input_manifests)</code> of the depset of resolved inputs"
+              + " and the runfiles metadata required to run the tools, both of them suitable for"
+              + " passing as the same-named arguments of the <code>ctx.actions.run</code> method."
+              + "<br/><br/>In contrast to <code>ctx.resolve_command</code>, this method does not"
+              + " require that Bash be installed on the machine, so it's suitable for rules built"
+              + " on Windows.",
+      parameters = {
+        @Param(
+            name = "tools",
+            defaultValue = "[]",
+            type = SkylarkList.class,
+            generic1 = TransitiveInfoCollectionApi.class,
+            named = true,
+            positional = false,
+            doc = "List of tools (list of targets)."),
+      },
+      useLocation = false,
+      useEnvironment = false)
+  public Tuple<Object> resolveTools(SkylarkList tools) throws EvalException;
 }

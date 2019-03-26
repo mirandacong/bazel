@@ -15,9 +15,9 @@
 package com.google.devtools.build.lib.rules.java.proto;
 
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static com.google.devtools.build.lib.cmdline.Label.parseAbsoluteUnchecked;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
+import static com.google.devtools.build.lib.rules.java.JavaRuleClasses.HOST_JAVA_RUNTIME_ATTRIBUTE_NAME;
 import static com.google.devtools.build.lib.rules.java.proto.JplCcLinkParams.createCcLinkingInfo;
 import static com.google.devtools.build.lib.rules.java.proto.StrictDepsUtils.createNonStrictCompilationArgsProvider;
 
@@ -26,23 +26,25 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
+import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
+import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.AspectDefinition;
 import com.google.devtools.build.lib.packages.AspectParameters;
-import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
+import com.google.devtools.build.lib.rules.java.JavaRuleClasses;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
-import com.google.devtools.build.lib.rules.java.JavaRuntimeInfo;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.rules.java.JavaSkylarkApiProvider;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
@@ -53,7 +55,6 @@ import com.google.devtools.build.lib.rules.proto.ProtoConfiguration;
 import com.google.devtools.build.lib.rules.proto.ProtoInfo;
 import com.google.devtools.build.lib.rules.proto.ProtoLangToolchainProvider;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
-import javax.annotation.Nullable;
 
 /** An Aspect which JavaLiteProtoLibrary injects to build Java Lite protos. */
 public class JavaLiteProtoAspect extends NativeAspectClass implements ConfiguredAspectFactory {
@@ -67,27 +68,26 @@ public class JavaLiteProtoAspect extends NativeAspectClass implements Configured
 
   private final JavaSemantics javaSemantics;
 
-  @Nullable private final String jacocoLabel;
   private final String defaultProtoToolchainLabel;
-  private final LabelLateBoundDefault<JavaConfiguration> hostJdkAttribute;
-  private final LabelLateBoundDefault<JavaConfiguration> javaToolchainAttribute;
+  private final Label hostJdkAttribute;
+  private final Label javaToolchainAttribute;
 
   public JavaLiteProtoAspect(
       JavaSemantics javaSemantics,
-      @Nullable String jacocoLabel,
       String defaultProtoToolchainLabel,
-      LabelLateBoundDefault<JavaConfiguration> hostJdkAttribute,
-      LabelLateBoundDefault<JavaConfiguration> javaToolchainAttribute) {
+      RuleDefinitionEnvironment env) {
     this.javaSemantics = javaSemantics;
-    this.jacocoLabel = jacocoLabel;
     this.defaultProtoToolchainLabel = defaultProtoToolchainLabel;
-    this.hostJdkAttribute = hostJdkAttribute;
-    this.javaToolchainAttribute = javaToolchainAttribute;
+    this.hostJdkAttribute = JavaSemantics.hostJdkAttribute(env);
+    this.javaToolchainAttribute = JavaSemantics.javaToolchainAttribute(env);
   }
 
   @Override
   public ConfiguredAspect create(
-      ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+      ConfiguredTargetAndData ctadBase,
+      RuleContext ruleContext,
+      AspectParameters parameters,
+      String toolsRepository)
       throws InterruptedException, ActionConflictException {
     ConfiguredAspect.Builder aspect = new ConfiguredAspect.Builder(this, parameters, ruleContext);
 
@@ -107,16 +107,11 @@ public class JavaLiteProtoAspect extends NativeAspectClass implements Configured
         new AspectDefinition.Builder(this)
             .propagateAlongAttribute("deps")
             .propagateAlongAttribute("exports")
-            .requiresConfigurationFragments(JavaConfiguration.class, ProtoConfiguration.class)
+            .requiresConfigurationFragments(
+                JavaConfiguration.class, ProtoConfiguration.class, PlatformConfiguration.class)
             .requireSkylarkProviders(ProtoInfo.PROVIDER.id())
             .advertiseProvider(JavaProtoLibraryAspectProvider.class)
-            .advertiseProvider(
-                ImmutableList.of(
-                    JavaSkylarkApiProvider.SKYLARK_NAME,
-                    // This is legacy from when we had a "java" provider on the base proto_library,
-                    // forcing us to use a different name ("proto_java") for the aspect's provider.
-                    // For backwards compatibility we retain proto_java as well.
-                    JavaSkylarkApiProvider.PROTO_NAME))
+            .advertiseProvider(ImmutableList.of(JavaSkylarkApiProvider.SKYLARK_NAME))
             .add(
                 attr(JavaProtoAspectCommon.LITE_PROTO_TOOLCHAIN_ATTR, LABEL)
                     .mandatoryNativeProviders(
@@ -124,23 +119,17 @@ public class JavaLiteProtoAspect extends NativeAspectClass implements Configured
                             ProtoLangToolchainProvider.class))
                     .value(getProtoToolchainLabel(defaultProtoToolchainLabel)))
             .add(
-                attr(":host_jdk", LABEL)
+                attr(HOST_JAVA_RUNTIME_ATTRIBUTE_NAME, LABEL)
                     .cfg(HostTransition.INSTANCE)
                     .value(hostJdkAttribute)
-                    .mandatoryProviders(JavaRuntimeInfo.PROVIDER.id()))
+                    .mandatoryProviders(ToolchainInfo.PROVIDER.id()))
             .add(
-                attr(":java_toolchain", LABEL)
+                attr(JavaRuleClasses.JAVA_TOOLCHAIN_ATTRIBUTE_NAME, LABEL)
                     .useOutputLicenses()
-                    .allowedRuleClasses("java_toolchain")
-                    .value(javaToolchainAttribute));
+                    .value(javaToolchainAttribute)
+                    .mandatoryProviders(ToolchainInfo.PROVIDER.id()));
 
-    Attribute.Builder<Label> jacocoAttr =
-        attr("$jacoco_instrumentation", LABEL).cfg(HostTransition.INSTANCE);
-
-    if (jacocoLabel != null) {
-      jacocoAttr.value(parseAbsoluteUnchecked(jacocoLabel));
-    }
-    return result.add(jacocoAttr).build();
+    return result.build();
   }
 
   private static class Impl {
@@ -238,11 +227,6 @@ public class JavaLiteProtoAspect extends NativeAspectClass implements Configured
       JavaSkylarkApiProvider skylarkApiProvider = JavaSkylarkApiProvider.fromRuleContext();
       aspect
           .addSkylarkTransitiveInfo(JavaSkylarkApiProvider.NAME, skylarkApiProvider)
-          // This is legacy from when we had a "java" provider on the base proto_library,
-          // forcing us to use a different name ("proto_java") for the aspect's provider.
-          // For backwards compatibility we retain proto_java as well.
-          .addSkylarkTransitiveInfo(
-              JavaSkylarkApiProvider.PROTO_NAME.getLegacyId(), skylarkApiProvider)
           .addProvider(
               new JavaProtoLibraryAspectProvider(
                   transitiveOutputJars.build(),

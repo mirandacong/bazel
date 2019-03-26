@@ -905,6 +905,42 @@ public class SkylarkDefinedAspectsTest extends AnalysisTestCase {
   }
 
   @Test
+  public void aspectSkippingOrphanArtifactsWithLocation() throws Exception {
+    scratch.file(
+        "simple/print.bzl",
+        "def _print_expanded_location_impl(target, ctx):",
+        "    return struct(result=ctx.expand_location(ctx.rule.attr.cmd, []))",
+        "",
+        "print_expanded_location = aspect(",
+        "    implementation = _print_expanded_location_impl,",
+        ")");
+    scratch.file(
+        "simple/BUILD",
+        "filegroup(",
+        "    name = \"files\",",
+        "    srcs = [\"afile\"],",
+        ")",
+        "",
+        "genrule(",
+        "    name = \"concat_all_files\",",
+        "    srcs = [\":files\"],",
+        "    outs = [\"concatenated.txt\"],",
+        "    cmd = \"$(location :files)\"",
+        ")");
+
+    reporter.removeHandler(failFastHandler);
+    AnalysisResult analysisResult =
+        update(
+            ImmutableList.of("//simple:print.bzl%print_expanded_location"),
+            "//simple:concat_all_files");
+    assertThat(analysisResult.hasError()).isFalse();
+    AspectValue value = Iterables.getOnlyElement(analysisResult.getAspects());
+    String result = (String) value.getConfiguredAspect().get("result");
+
+    assertThat(result).isEqualTo("simple/afile");
+  }
+
+  @Test
   public void topLevelAspectIsNotAnAspect() throws Exception {
     scratch.file("test/aspect.bzl", "MyAspect = 4");
     scratch.file("test/BUILD", "java_library(name = 'xxx')");
@@ -1281,6 +1317,42 @@ public class SkylarkDefinedAspectsTest extends AnalysisTestCase {
     assertContainsEvent(
         "Aspect //test:aspect.bzl%MyAspectMismatch requires rule my_rule to specify attribute "
             + "'my_attr' with type string.");
+  }
+
+  @Test
+  public void aspectParametersDontSupportSelect() throws Exception {
+    scratch.file(
+        "test/aspect.bzl",
+        "def _impl(target, ctx):",
+        "   return struct()",
+        "def _rule_impl(ctx):",
+        "   return struct()",
+        "MyAspectMismatch = aspect(",
+        "    implementation=_impl,",
+        "    attrs = { 'my_attr' : attr.string(values=['aaa']) },",
+        ")",
+        "my_rule = rule(",
+        "    implementation=_rule_impl,",
+        "    attrs = { 'deps' : attr.label_list(aspects=[MyAspectMismatch]),",
+        "              'my_attr' : attr.string() },",
+        ")");
+    scratch.file(
+        "test/BUILD",
+        "load('//test:aspect.bzl', 'my_rule')",
+        "my_rule(name = 'xxx', my_attr = select({'//conditions:default': 'foo'}))");
+
+    reporter.removeHandler(failFastHandler);
+    try {
+      AnalysisResult result = update(ImmutableList.<String>of(), "//test:xxx");
+      assertThat(keepGoing()).isTrue();
+      assertThat(result.hasError()).isTrue();
+    } catch (Exception e) {
+      // expect to fail.
+    }
+    assertContainsEvent(
+        "//test:xxx: attribute 'my_attr' has a select() and aspect "
+            + "//test:aspect.bzl%MyAspectMismatch also declares '//test:xxx'. Aspect attributes "
+            + "don't currently support select().");
   }
 
   @Test
@@ -2139,9 +2211,9 @@ public class SkylarkDefinedAspectsTest extends AnalysisTestCase {
       // expected
     }
     assertContainsEvent(
-        "ERROR /workspace/test/BUILD:4:1: Aspect //test:aspect.bzl%a2 is"
+        "ERROR /workspace/test/BUILD:3:1: Aspect //test:aspect.bzl%a2 is"
             + " applied twice, both before and after aspect //test:aspect.bzl%a1 "
-            + "(when propagating from //test:r2 to //test:r1 via attribute dep)");
+            + "(when propagating to //test:r1)");
   }
 
   @Test
@@ -2184,9 +2256,9 @@ public class SkylarkDefinedAspectsTest extends AnalysisTestCase {
       // expected
     }
     assertContainsEvent(
-        "ERROR /workspace/test/BUILD:4:1: Aspect //test:aspect.bzl%a2 is"
+        "ERROR /workspace/test/BUILD:3:1: Aspect //test:aspect.bzl%a2 is"
             + " applied twice, both before and after aspect //test:aspect.bzl%a1 "
-            + "(when propagating from //test:r2 to //test:r1 via attribute dep)");
+            + "(when propagating to //test:r1)");
   }
 
   /**
@@ -2588,6 +2660,91 @@ public class SkylarkDefinedAspectsTest extends AnalysisTestCase {
                 .map(a -> ((Action) a).getPrimaryOutput().getExecPath().getBaseName())
                 .collect(toList()))
         .containsExactly("r0", "a1");
+  }
+
+  @Test
+  public void testRuleAndAspectAttrConflict() throws Exception {
+    scratch.file(
+        "test/aspect.bzl",
+        "MyInfo = provider()",
+        "def _impl(target, ctx):",
+        "   return [MyInfo(hidden_attr_label = str(ctx.attr._hiddenattr.label))]",
+        "",
+        "def _rule_impl(ctx):",
+        "   return []",
+        "",
+        "my_rule = rule(implementation = _rule_impl,",
+        "   attrs = { '_hiddenattr' : attr.label(default = Label('//test:xxx')) },",
+        ")",
+        "MyAspect = aspect(",
+        "   implementation=_impl,",
+        "   attrs = { '_hiddenattr' : attr.label(default = Label('//test:zzz')) },",
+        ")");
+    scratch.file(
+        "test/BUILD",
+        "load('//test:aspect.bzl', 'my_rule')",
+        "cc_library(",
+        "     name = 'xxx',",
+        ")",
+        "my_rule(",
+        "     name = 'yyy',",
+        ")",
+        "cc_library(",
+        "     name = 'zzz',",
+        ")");
+    AnalysisResult analysisResult =
+        update(ImmutableList.of("test/aspect.bzl%MyAspect"), "//test:yyy");
+    AspectValue aspectValue = analysisResult.getAspects().iterator().next();
+    ConfiguredAspect configuredAspect = aspectValue.getConfiguredAspect();
+    assertThat(configuredAspect).isNotNull();
+
+    SkylarkKey myInfoKey =
+        new SkylarkKey(Label.parseAbsolute("//test:aspect.bzl", ImmutableMap.of()), "MyInfo");
+    StructImpl myInfo = (StructImpl) configuredAspect.get(myInfoKey);
+    assertThat(myInfo.getValue("hidden_attr_label")).isEqualTo("//test:zzz");
+  }
+
+  /** Simple straightforward linear aspects-on-aspects. */
+  @Test
+  public void aspectOnAspectAttrConflict() throws Exception {
+    scratch.file(
+        "test/aspect.bzl",
+        "MyInfo = provider()",
+        "a1p = provider()",
+        "def _a1_impl(target,ctx):",
+        "  return struct(a1p = a1p(text = 'random'))",
+        "a1 = aspect(_a1_impl,",
+        "   attrs = { '_hiddenattr' : attr.label(default = Label('//test:xxx')) },",
+        "   attr_aspects = ['dep'], provides = ['a1p'])",
+        "a2p = provider()",
+        "def _a2_impl(target,ctx):",
+        "   return [MyInfo(hidden_attr_label = str(ctx.attr._hiddenattr.label))]",
+        "a2 = aspect(_a2_impl,",
+        "  attrs = { '_hiddenattr' : attr.label(default = Label('//test:zzz')) },",
+        "  attr_aspects = ['dep'], required_aspect_providers = ['a1p'])",
+        "def _r1_impl(ctx):",
+        "  pass",
+        "def _r2_impl(ctx):",
+        "  return struct(result = ctx.attr.dep[MyInfo].hidden_attr_label)",
+        "r1 = rule(_r1_impl, attrs = { 'dep' : attr.label(aspects = [a1])})",
+        "r2 = rule(_r2_impl, attrs = { 'dep' : attr.label(aspects = [a2])})");
+    scratch.file(
+        "test/BUILD",
+        "load(':aspect.bzl', 'r1', 'r2')",
+        "r1(name = 'r0')",
+        "r1(name = 'r1', dep = ':r0')",
+        "r2(name = 'r2', dep = ':r1')",
+        "cc_library(",
+        "     name = 'xxx',",
+        ")",
+        "cc_library(",
+        "     name = 'zzz',",
+        ")");
+    AnalysisResult analysisResult = update("//test:r2");
+    ConfiguredTarget target = Iterables.getOnlyElement(analysisResult.getTargetsToBuild());
+    String result = (String) target.get("result");
+
+    assertThat(result).isEqualTo("//test:zzz");
   }
 
   /** SkylarkAspectTest with "keep going" flag */

@@ -31,7 +31,7 @@ To run Bazel with remote execution, you can use one of the following:
         [gRPC protocol](https://github.com/bazelbuild/remote-apis)
         directly to create your own remote execution service.
 *   Self-hosted
-    *   [Buildbarn](https://github.com/EdSchouten/bazel-buildbarn)
+    *   [Buildbarn](https://github.com/buildbarn)
     *   [Buildfarm](https://github.com/bazelbuild/bazel-buildfarm)
     *   [BuildGrid](https://gitlab.com/BuildGrid/buildgrid)
 *   Hosted
@@ -46,4 +46,4 @@ To run Bazel with remote execution, you can use one of the following:
 
 Remote execution of Bazel builds imposes a set of mandatory configuration
 constraints on the build. For more information, see
-[Adapting Bazel Rules for Remote Execution](https://docs.bazel.build/versions/master/remote-execution-rules.html).
+[Adapting Bazel Rules for Remote Execution](remote-execution-rules.html).

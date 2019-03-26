@@ -90,8 +90,11 @@ public class SandboxOptions extends OptionsBase {
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
       help =
-          "Let the sandbox print debug information on execution. This might help developers of "
-              + "Bazel or Starlark rules with debugging failures due to missing input files, etc.")
+          "Enables debugging features for the sandboxing feature. This includes two things: first, "
+              + "the sandbox root contents are left untouched after a build (and if sandboxfs is "
+              + "in use, the file system is left mounted); and second, prints extra debugging "
+              + "information on execution. This can help developers of Bazel or Starlark rules "
+              + "with debugging failures due to missing input files, etc.")
   public boolean sandboxDebug;
 
   @Option(
@@ -191,6 +194,17 @@ public class SandboxOptions extends OptionsBase {
             + "bare name, use the first binary of that name found in the PATH."
   )
   public String sandboxfsPath;
+
+  @Option(
+      name = "experimental_sandboxfs_map_symlink_targets",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      help =
+          "If true, maps the targets of symbolic links specified as action inputs into the "
+              + "sandbox. This feature exists purely to workaround buggy rules that do not do "
+              + "this on their own and should be removed once all such rules are fixed.")
+  public boolean sandboxfsMapSymlinkTargets;
 
   public ImmutableSet<Path> getInaccessiblePaths(FileSystem fs) {
     List<Path> inaccessiblePaths = new ArrayList<>();

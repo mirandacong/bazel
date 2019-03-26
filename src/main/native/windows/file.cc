@@ -12,8 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <stdint.h>  // uint8_t
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include <windows.h>
+#include <WinIoCtl.h>
+
+#include <stdint.h>  // uint8_t
 
 #include <memory>
 #include <sstream>
@@ -38,6 +44,31 @@ wstring RemoveUncPrefixMaybe(const wstring& path) {
   return bazel::windows::HasUncPrefix(path.c_str()) ? path.substr(4) : path;
 }
 
+bool HasDriveSpecifierPrefix(const wstring& p) {
+  if (HasUncPrefix(p.c_str())) {
+    return p.size() >= 7 && iswalpha(p[4]) && p[5] == ':' && p[6] == '\\';
+  } else {
+    return p.size() >= 3 && iswalpha(p[0]) && p[1] == ':' && p[2] == '\\';
+  }
+}
+
+bool IsAbsoluteNormalizedWindowsPath(const wstring& p) {
+  if (p.empty()) {
+    return false;
+  }
+  if (IsDevNull(p.c_str())) {
+    return true;
+  }
+  if (p.find_first_of('/') != wstring::npos) {
+    return false;
+  }
+
+  return HasDriveSpecifierPrefix(p) && p.find(L".\\") != 0 &&
+         p.find(L"\\.\\") == wstring::npos && p.find(L"\\.") != p.size() - 2 &&
+         p.find(L"..\\") != 0 && p.find(L"\\..\\") == wstring::npos &&
+         p.find(L"\\..") != p.size() - 3;
+}
+
 static wstring uint32asHexString(uint32_t value) {
   WCHAR attr_str[8];
   for (int i = 0; i < 8; ++i) {
@@ -47,30 +78,23 @@ static wstring uint32asHexString(uint32_t value) {
   return wstring(attr_str, 8);
 }
 
-static DWORD GetAttributesOfMaybeMissingFile(const WCHAR* path) {
-  // According to a comment in .NET CoreFX [1] (which is the only relevant
-  // information we found as of 2018-07-13) GetFileAttributesW may fail with
-  // ERROR_ACCESS_DENIED if the file is marked for deletion but not yet
-  // actually deleted, but FindFirstFileW should succeed even then.
-  //
-  // [1]
-  // https://github.com/dotnet/corefx/blob/f25eb288a449010574a6e95fe298f3ad880ada1e/src/System.IO.FileSystem/src/System/IO/FileSystem.Windows.cs#L205-L208
-  WIN32_FIND_DATAW find_data;
-  HANDLE find = FindFirstFileW(path, &find_data);
-  if (find == INVALID_HANDLE_VALUE) {
-    // The path is deleted and we couldn't create a directory there.
-    // Give up.
-    return INVALID_FILE_ATTRIBUTES;
+int IsJunctionOrDirectorySymlink(const WCHAR* path, wstring* error) {
+  if (!IsAbsoluteNormalizedWindowsPath(path)) {
+    if (error) {
+      *error = MakeErrorMessage(WSTR(__FILE__), __LINE__,
+                                L"IsJunctionOrDirectorySymlink", path,
+                                L"expected an absolute Windows path");
+    }
+    return IS_JUNCTION_ERROR;
   }
-  FindClose(find);
-  // The path exists, yet we cannot open it for metadata-reading. Report at
-  // least the attributes, then give up.
-  return find_data.dwFileAttributes;
-}
 
-int IsJunctionOrDirectorySymlink(const WCHAR* path) {
   DWORD attrs = ::GetFileAttributesW(path);
   if (attrs == INVALID_FILE_ATTRIBUTES) {
+    DWORD err = GetLastError();
+    if (error) {
+      *error = MakeErrorMessage(WSTR(__FILE__), __LINE__,
+                                L"IsJunctionOrDirectorySymlink", path, err);
+    }
     return IS_JUNCTION_ERROR;
   } else {
     if ((attrs & FILE_ATTRIBUTE_DIRECTORY) &&
@@ -83,28 +107,21 @@ int IsJunctionOrDirectorySymlink(const WCHAR* path) {
 }
 
 wstring GetLongPath(const WCHAR* path, unique_ptr<WCHAR[]>* result) {
-  DWORD size = ::GetLongPathNameW(path, NULL, 0);
+  if (!IsAbsoluteNormalizedWindowsPath(path)) {
+    return MakeErrorMessage(WSTR(__FILE__), __LINE__, L"GetLongPath", path,
+                            L"expected an absolute Windows path");
+  }
+
+  std::wstring wpath(AddUncPrefixMaybe(path));
+  DWORD size = ::GetLongPathNameW(wpath.c_str(), NULL, 0);
   if (size == 0) {
     DWORD err_code = GetLastError();
     return MakeErrorMessage(WSTR(__FILE__), __LINE__, L"GetLongPathNameW", path,
                             err_code);
   }
   result->reset(new WCHAR[size]);
-  ::GetLongPathNameW(path, result->get(), size);
+  ::GetLongPathNameW(wpath.c_str(), result->get(), size);
   return L"";
-}
-
-HANDLE OpenDirectory(const WCHAR* path, bool read_write) {
-  return ::CreateFileW(
-      /* lpFileName */ path,
-      /* dwDesiredAccess */
-      read_write ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ,
-      /* dwShareMode */ 0,
-      /* lpSecurityAttributes */ NULL,
-      /* dwCreationDisposition */ OPEN_EXISTING,
-      /* dwFlagsAndAttributes */ FILE_FLAG_OPEN_REPARSE_POINT |
-          FILE_FLAG_BACKUP_SEMANTICS,
-      /* hTemplateFile */ NULL);
 }
 
 #pragma pack(push, 4)
@@ -130,6 +147,23 @@ typedef struct _JunctionDescription {
 
 int CreateJunction(const wstring& junction_name, const wstring& junction_target,
                    wstring* error) {
+  if (!IsAbsoluteNormalizedWindowsPath(junction_name)) {
+    if (error) {
+      *error = MakeErrorMessage(
+          WSTR(__FILE__), __LINE__, L"CreateJunction", junction_name,
+          L"expected an absolute Windows path for junction_name");
+    }
+    CreateJunctionResult::kError;
+  }
+  if (!IsAbsoluteNormalizedWindowsPath(junction_target)) {
+    if (error) {
+      *error = MakeErrorMessage(
+          WSTR(__FILE__), __LINE__, L"CreateJunction", junction_target,
+          L"expected an absolute Windows path for junction_target");
+    }
+    CreateJunctionResult::kError;
+  }
+
   const wstring target = HasUncPrefix(junction_target.c_str())
                              ? junction_target.substr(4)
                              : junction_target;
@@ -208,23 +242,11 @@ int CreateJunction(const wstring& junction_name, const wstring& junction_target,
         return CreateJunctionResult::kDisappeared;
       }
 
-      wstring err_str = uint32asHexString(err);
       // The path seems to exist yet we cannot open it for metadata-reading.
       // Report as much information as we have, then give up.
-      DWORD attr = GetAttributesOfMaybeMissingFile(name.c_str());
-      if (attr == INVALID_FILE_ATTRIBUTES) {
-        if (error) {
-          *error = MakeErrorMessage(
-              WSTR(__FILE__), __LINE__, L"CreateFileW", name,
-              wstring(L"err=0x") + err_str + L", invalid attributes");
-        }
-      } else {
-        if (error) {
-          *error =
-              MakeErrorMessage(WSTR(__FILE__), __LINE__, L"CreateFileW", name,
-                               wstring(L"err=0x") + err_str + L", attr=0x" +
-                                   uint32asHexString(attr));
-        }
+      if (error) {
+        *error = MakeErrorMessage(WSTR(__FILE__), __LINE__, L"CreateFileW",
+                                  name, err);
       }
       return CreateJunctionResult::kError;
     }
@@ -377,8 +399,81 @@ int CreateJunction(const wstring& junction_name, const wstring& junction_target,
   return CreateJunctionResult::kSuccess;
 }
 
+struct DirectoryStatus {
+  enum {
+    kDoesNotExist = 0,
+    kDirectoryEmpty = 1,
+    kDirectoryNotEmpty = 2,
+    kChildMarkedForDeletionExists = 3,
+  };
+};
+
+// Check whether the directory and its child elements truly exist, or are marked
+// for deletion. The result could be:
+// 1. The give path doesn't exist
+// 2. The directory is empty
+// 3. The directory contains valid files or dirs, so not empty
+// 4. The directory contains only files or dirs marked for deletion.
+int CheckDirectoryStatus(const wstring& path) {
+  static const wstring kDot(L".");
+  static const wstring kDotDot(L"..");
+  bool found_valid_file = false;
+  bool found_child_marked_for_deletion = false;
+  WIN32_FIND_DATAW metadata;
+  HANDLE handle = ::FindFirstFileW((path + L"\\*").c_str(), &metadata);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return DirectoryStatus::kDoesNotExist;
+  }
+  do {
+    if (kDot != metadata.cFileName && kDotDot != metadata.cFileName) {
+      std::wstring child = path + L"\\" + metadata.cFileName;
+      DWORD attributes = GetFileAttributesW(child.c_str());
+      if (attributes != INVALID_FILE_ATTRIBUTES) {
+        // If there is a valid file under the directory,
+        // then the directory is truely not empty.
+        // We should just return kDirectoryNotEmpty.
+        found_valid_file = true;
+        break;
+      } else {
+        DWORD error_code = GetLastError();
+        // If the file or directory is in deleting process,
+        // GetFileAttributesW returns ERROR_ACCESS_DENIED,
+        // If it's already deleted at the time we check,
+        // GetFileAttributesW returns ERROR_FILE_NOT_FOUND.
+        // If GetFileAttributesW fails with other reason, we consider there is a
+        // valid file that we cannot open, thus return kDirectoryNotEmpty
+        if (error_code != ERROR_ACCESS_DENIED &&
+            error_code != ERROR_FILE_NOT_FOUND) {
+          found_valid_file = true;
+          break;
+        } else if (error_code == ERROR_ACCESS_DENIED) {
+          found_child_marked_for_deletion = true;
+        }
+      }
+    }
+  } while (::FindNextFileW(handle, &metadata));
+  ::FindClose(handle);
+  if (found_valid_file) {
+    return DirectoryStatus::kDirectoryNotEmpty;
+  }
+  if (found_child_marked_for_deletion) {
+    return DirectoryStatus::kChildMarkedForDeletionExists;
+  }
+  return DirectoryStatus::kDirectoryEmpty;
+}
+
 int DeletePath(const wstring& path, wstring* error) {
-  const wchar_t* wpath = path.c_str();
+  if (!IsAbsoluteNormalizedWindowsPath(path)) {
+    if (error) {
+      *error = MakeErrorMessage(WSTR(__FILE__), __LINE__, L"DeletePath", path,
+                                L"expected an absolute Windows path");
+    }
+    return DeletePathResult::kError;
+  }
+
+  const std::wstring winpath(AddUncPrefixMaybe(path));
+  const wchar_t* wpath = winpath.c_str();
+
   if (!DeleteFileW(wpath)) {
     DWORD err = GetLastError();
     if (err == ERROR_SHARING_VIOLATION) {
@@ -407,7 +502,7 @@ int DeletePath(const wstring& path, wstring* error) {
         // The file disappeared, or one of its parent directories disappeared,
         // or one of its parent directories is no longer a directory.
         return DeletePathResult::kDoesNotExist;
-      } else if (err != ERROR_ACCESS_DENIED) {
+      } else {
         // Some unknown error occurred.
         if (error) {
           *error = MakeErrorMessage(WSTR(__FILE__), __LINE__,
@@ -415,30 +510,65 @@ int DeletePath(const wstring& path, wstring* error) {
         }
         return DeletePathResult::kError;
       }
-
-      attr = GetAttributesOfMaybeMissingFile(wpath);
-      if (attr == INVALID_FILE_ATTRIBUTES) {
-        // The path is already deleted.
-        return DeletePathResult::kDoesNotExist;
-      }
     }
 
+    // DeleteFileW failed with access denied, but the path exists.
     if (attr & FILE_ATTRIBUTE_DIRECTORY) {
       // It's a directory or a junction.
-      if (!RemoveDirectoryW(wpath)) {
+
+      // Sometimes a deleted directory lingers in its parent dir
+      // after the deleting handle has already been closed.
+      // In this case we check the content of the parent directory,
+      // if we don't find any valid file, we try to delete it again after 5 ms.
+      // But we don't want to hang infinitely because another application
+      // can hold the handle for a long time. So try at most 20 times,
+      // which means a process time of 100-120ms.
+      // Inspired by
+      // https://github.com/Alexpux/Cygwin/commit/28fa2a72f810670a0562ea061461552840f5eb70
+      // Useful link: https://stackoverflow.com/questions/31606978
+      int count = 20;
+      while (count > 0 && !RemoveDirectoryW(wpath)) {
         // Failed to delete the directory.
         err = GetLastError();
         if (err == ERROR_SHARING_VIOLATION || err == ERROR_ACCESS_DENIED) {
           // The junction or directory is in use by another process, or we have
           // no permission to delete it.
           return DeletePathResult::kAccessDenied;
-        } else if (err == ERROR_DIR_NOT_EMPTY) {
-          // The directory is not empty.
-          return DeletePathResult::kDirectoryNotEmpty;
         } else if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) {
           // The directory or one of its directories disappeared or is no longer
           // a directory.
           return DeletePathResult::kDoesNotExist;
+        } else if (err == ERROR_DIR_NOT_EMPTY) {
+          // We got ERROR_DIR_NOT_EMPTY error, but maybe the child files and
+          // dirs are already marked for deletion, let's check the status of the
+          // child elements to see if we should retry the delete operation.
+          switch (CheckDirectoryStatus(winpath)) {
+            case DirectoryStatus::kDirectoryNotEmpty:
+              // The directory is truely not empty.
+              return DeletePathResult::kDirectoryNotEmpty;
+            case DirectoryStatus::kDirectoryEmpty:
+              // If we didn't find any pending delete child files or dirs, it
+              // means at the time we check, the child elements marked for
+              // deletion are gone, the directory is now empty, we can then try
+              // to delete the directory again without waiting.
+              continue;
+            case DirectoryStatus::kChildMarkedForDeletionExists:
+              // If the directory only contains child elements marked for
+              // deletion, wait the system for 5 ms to clean them up and try to
+              // delete the directory again.
+              Sleep(5L);
+              continue;
+            case DirectoryStatus::kDoesNotExist:
+              // This case should never happen, because ERROR_DIR_NOT_EMPTY
+              // means the directory exists. But if it does happen, return an
+              // error message.
+              if (error) {
+                *error =
+                    MakeErrorMessage(WSTR(__FILE__), __LINE__,
+                                     L"RemoveDirectoryW", path, GetLastError());
+              }
+              return DeletePathResult::kError;
+          }
         }
 
         // Some unknown error occurred.
@@ -448,7 +578,13 @@ int DeletePath(const wstring& path, wstring* error) {
         }
         return DeletePathResult::kError;
       }
-    } else {
+
+      if (count == 0) {
+        // After trying 20 times, the "deleted" sub-directories or files still
+        // won't go away, so just return kDirectoryNotEmpty error.
+        return DeletePathResult::kDirectoryNotEmpty;
+      }
+    } else if (attr & FILE_ATTRIBUTE_READONLY) {
       // It's a file and it's probably read-only.
       // Make it writable then try deleting it again.
       attr &= ~FILE_ATTRIBUTE_READONLY;
@@ -483,6 +619,15 @@ int DeletePath(const wstring& path, wstring* error) {
         }
         return DeletePathResult::kError;
       }
+    } else {
+      if (error) {
+        *error = MakeErrorMessage(
+            WSTR(__FILE__), __LINE__,
+            (std::wstring(L"Unknown error, winpath=[") + winpath + L"]")
+                .c_str(),
+            path, err);
+      }
+      return DeletePathResult::kError;
     }
   }
   return DeletePathResult::kSuccess;

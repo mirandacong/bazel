@@ -30,4 +30,24 @@ public interface SkyValue extends Serializable {
   default BigInteger getValueFingerprint() {
     return null;
   }
+
+  /**
+   * Returns true for values that may compare objects that must be compared using reference
+   * equality. Such values may force re-evaluation of downstream nodes even if they evaluate to the
+   * same {@link Version} as before, since the downstream nodes may have reference-unequal objects
+   * from the previous evaluation. Under normal circumstances, a node can never re-evaluate to the
+   * same {@link Version}, so this doesn't come into play.
+   */
+  default boolean mustBeReferenceComparedOnRecomputation() {
+    return false;
+  }
+
+  /**
+   * Returns true for values that can be reused across builds. Some values are inherently "flaky",
+   * like test statuses or stamping information, and in certain circumstances, those values cannot
+   * be shared across builds/servers.
+   */
+  default boolean dataIsShareable() {
+    return true;
+  }
 }

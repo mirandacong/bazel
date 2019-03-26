@@ -20,24 +20,28 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.common.collect.Interner;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.collect.ImmutableSortedKeyMap;
+import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.ExtendedEventHandler.Postable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.License.DistributionType;
+import com.google.devtools.build.lib.packages.RuleClass.Builder.ThirdPartyLicenseExistencePolicy;
 import com.google.devtools.build.lib.skyframe.serialization.DeserializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.util.SpellChecker;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -246,7 +250,7 @@ public class Package {
    */
   public ImmutableMap<RepositoryName, RepositoryName> getRepositoryMapping(
       RepositoryName repository) {
-    if (!packageIdentifier.equals(Label.EXTERNAL_PACKAGE_IDENTIFIER)) {
+    if (!packageIdentifier.equals(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER)) {
       throw new UnsupportedOperationException("Can only access the external package repository"
           + "mappings from the //external package");
     }
@@ -266,7 +270,7 @@ public class Package {
    */
   public ImmutableMap<RepositoryName, ImmutableMap<RepositoryName, RepositoryName>>
       getExternalPackageRepositoryMappings() {
-    if (!packageIdentifier.equals(Label.EXTERNAL_PACKAGE_IDENTIFIER)) {
+    if (!packageIdentifier.equals(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER)) {
       throw new UnsupportedOperationException(
           "Can only access the external package repository"
               + "mappings from the //external package");
@@ -740,8 +744,9 @@ public class Package {
 
   public static Builder newExternalPackageBuilder(
       Builder.Helper helper, RootedPath workspacePath, String runfilesPrefix) {
-    Builder b = new Builder(helper.createFreshPackage(
-        Label.EXTERNAL_PACKAGE_IDENTIFIER, runfilesPrefix));
+    Builder b =
+        new Builder(
+            helper.createFreshPackage(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER, runfilesPrefix));
     b.setFilename(workspacePath);
     return b;
   }
@@ -764,13 +769,13 @@ public class Package {
        * done loading the given {@link Package}.
        *
        * @param pkg the loaded {@link Package}
-       * @param skylarkSemantics are the semantics used to load the package
+       * @param starlarkSemantics are the semantics used to load the package
        * @param loadTimeMs the wall time, in ms, that it took to load the package. More precisely,
        *     this is the wall time of the call to {@link PackageFactory#createPackageFromAst}.
        *     Notably, this does not include the time to read and parse the package's BUILD file, nor
        *     the time to read, parse, or evaluate any of the transitively loaded .bzl files.
        */
-      void onLoadingComplete(Package pkg, SkylarkSemantics skylarkSemantics, long loadTimeMs);
+      void onLoadingComplete(Package pkg, StarlarkSemantics starlarkSemantics, long loadTimeMs);
     }
 
     /** {@link Helper} that simply calls the {@link Package} constructor. */
@@ -787,8 +792,7 @@ public class Package {
 
       @Override
       public void onLoadingComplete(
-          Package pkg, SkylarkSemantics skylarkSemantics, long loadTimeMs) {
-      }
+          Package pkg, StarlarkSemantics starlarkSemantics, long loadTimeMs) {}
     }
 
     /**
@@ -834,6 +838,9 @@ public class Package {
     private final List<String> registeredExecutionPlatforms = new ArrayList<>();
     private final List<String> registeredToolchains = new ArrayList<>();
 
+    private ThirdPartyLicenseExistencePolicy thirdPartyLicenceExistencePolicy =
+        ThirdPartyLicenseExistencePolicy.USER_CONTROLLABLE;
+
     /**
      * True iff the "package" function has already been called in this package.
      */
@@ -849,6 +856,8 @@ public class Package {
      * package itself.
      */
     private Map<String, OutputFile> outputFilePrefixes = new HashMap<>();
+
+    private final Interner<ImmutableList<?>> listInterner = BlazeInterners.newStrongInterner();
 
     private boolean alreadyBuilt = false;
 
@@ -876,7 +885,7 @@ public class Package {
 
     /** Determine if we are in the WORKSPACE file or not */
     boolean isWorkspace() {
-      return pkg.getPackageIdentifier().equals(Label.EXTERNAL_PACKAGE_IDENTIFIER);
+      return pkg.getPackageIdentifier().equals(LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER);
     }
 
     String getPackageWorkspaceName() {
@@ -930,6 +939,10 @@ public class Package {
     /** Get the repository mapping for this package */
     ImmutableMap<RepositoryName, RepositoryName> getRepositoryMapping() {
       return this.repositoryMapping;
+    }
+
+    Interner<ImmutableList<?>> getListInterner() {
+      return listInterner;
     }
 
     /** Sets the name of this package's BUILD file. */
@@ -1007,6 +1020,15 @@ public class Package {
       return this;
     }
 
+    public Builder setThirdPartyLicenceExistencePolicy(ThirdPartyLicenseExistencePolicy policy) {
+      this.thirdPartyLicenceExistencePolicy = policy;
+      return this;
+    }
+
+    public ThirdPartyLicenseExistencePolicy getThirdPartyLicenseExistencePolicy() {
+      return thirdPartyLicenceExistencePolicy;
+    }
+
     /**
      * Returns whether the "package" function has been called yet
      */
@@ -1035,7 +1057,7 @@ public class Package {
       return this;
     }
 
-    Builder addFeatures(Iterable<String> features) {
+    public Builder addFeatures(Iterable<String> features) {
       Iterables.addAll(this.features, features);
       return this;
     }
@@ -1642,7 +1664,7 @@ public class Package {
         Package input,
         CodedOutputStream codedOut)
         throws IOException, SerializationException {
-      context.checkClassExplicitlyAllowed(Package.class);
+      context.checkClassExplicitlyAllowed(Package.class, input);
       PackageCodecDependencies codecDeps = context.getDependency(PackageCodecDependencies.class);
       codecDeps.getPackageSerializer().serialize(context, input, codedOut);
     }

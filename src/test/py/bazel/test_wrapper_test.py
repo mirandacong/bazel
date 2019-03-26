@@ -443,10 +443,21 @@ class TestWrapperTest(test_base.TestBase):
     # machines run Windows Server 2016 core which recognizes fewer MIME types
     # than desktop Windows versions, and one of the recognized types is ".ico"
     # files.
-    self.assertListEqual(mf_content, [
-        'out1/data1.ico\t70\timage/x-icon',
-        'out2/data2.dat\t16\tapplication/octet-stream'
-    ])
+    # Update(2019-03-05): apparently this MIME type is now recognized on CI as
+    # as "image/vnd.microsoft.icon". The standard MIME type is "image/x-icon",
+    # but Wikipedia lists a few alterantive ones, so the test will accept all of
+    # them.
+    if len(mf_content) != 2:
+      self._FailWithOutput(mf_content)
+    tokens = mf_content[0].split('\t')
+    if (len(tokens) != 3 or tokens[0] != 'out1/data1.ico' or
+        tokens[1] != '70' or tokens[2] not in [
+            'image/x-icon', 'image/vnd.microsoft.icon', 'image/ico',
+            'image/icon', 'text/ico', 'application/ico'
+        ]):
+      self._FailWithOutput(mf_content)
+    if mf_content[1] != 'out2/data2.dat\t16\tapplication/octet-stream':
+      self._FailWithOutput(mf_content)
 
   def _AssertUndeclaredOutputsAnnotations(self, flag):
     exit_code, bazel_testlogs, stderr = self.RunBazel(
@@ -472,7 +483,7 @@ class TestWrapperTest(test_base.TestBase):
 
     self.assertListEqual(annot_content, ['Hello aHello c'])
 
-  def _AssertXmlGeneration(self, flag):
+  def _AssertXmlGeneration(self, flag, split_xml=False):
     exit_code, bazel_testlogs, stderr = self.RunBazel(
         ['info', 'bazel-testlogs'])
     self.AssertExitCode(exit_code, 0, stderr)
@@ -483,6 +494,7 @@ class TestWrapperTest(test_base.TestBase):
         '//foo:xml_test',
         '-t-',
         '--test_output=errors',
+        '--%sexperimental_split_xml_generation' % ('' if split_xml else 'no'),
         flag,
     ])
     self.AssertExitCode(exit_code, 0, stderr)
@@ -521,7 +533,7 @@ class TestWrapperTest(test_base.TestBase):
         'stderr_line_2' not in stderr_lines[1]):
       self._FailWithOutput(xml_contents)
 
-  def _AssertXmlGeneratedByTestIsRetained(self, flag):
+  def _AssertXmlGeneratedByTestIsRetained(self, flag, split_xml=False):
     exit_code, bazel_testlogs, stderr = self.RunBazel(
         ['info', 'bazel-testlogs'])
     self.AssertExitCode(exit_code, 0, stderr)
@@ -532,6 +544,7 @@ class TestWrapperTest(test_base.TestBase):
         '//foo:xml2_test',
         '-t-',
         '--test_output=errors',
+        '--%sexperimental_split_xml_generation' % ('' if split_xml else 'no'),
         flag,
     ])
     self.AssertExitCode(exit_code, 0, stderr)
@@ -545,7 +558,7 @@ class TestWrapperTest(test_base.TestBase):
 
   def testTestExecutionWithTestSetupSh(self):
     self._CreateMockWorkspace()
-    flag = '--noexperimental_windows_native_test_wrapper'
+    flag = '--noincompatible_windows_native_test_wrapper'
     self._AssertPassingTest(flag)
     self._AssertFailingTest(flag)
     self._AssertPrintingTest(flag)
@@ -576,12 +589,14 @@ class TestWrapperTest(test_base.TestBase):
         ])
     self._AssertUndeclaredOutputs(flag)
     self._AssertUndeclaredOutputsAnnotations(flag)
-    self._AssertXmlGeneration(flag)
-    self._AssertXmlGeneratedByTestIsRetained(flag)
+    self._AssertXmlGeneration(flag, split_xml=False)
+    self._AssertXmlGeneration(flag, split_xml=True)
+    self._AssertXmlGeneratedByTestIsRetained(flag, split_xml=False)
+    self._AssertXmlGeneratedByTestIsRetained(flag, split_xml=True)
 
   def testTestExecutionWithTestWrapperExe(self):
     self._CreateMockWorkspace()
-    flag = '--experimental_windows_native_test_wrapper'
+    flag = '--incompatible_windows_native_test_wrapper'
     self._AssertPassingTest(flag)
     self._AssertFailingTest(flag)
     self._AssertPrintingTest(flag)
@@ -610,8 +625,10 @@ class TestWrapperTest(test_base.TestBase):
         ])
     self._AssertUndeclaredOutputs(flag)
     self._AssertUndeclaredOutputsAnnotations(flag)
-    self._AssertXmlGeneration(flag)
-    self._AssertXmlGeneratedByTestIsRetained(flag)
+    self._AssertXmlGeneration(flag, split_xml=False)
+    self._AssertXmlGeneration(flag, split_xml=True)
+    self._AssertXmlGeneratedByTestIsRetained(flag, split_xml=False)
+    self._AssertXmlGeneratedByTestIsRetained(flag, split_xml=True)
 
 
 if __name__ == '__main__':

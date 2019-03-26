@@ -45,6 +45,13 @@ skydoc_test(
 )
 
 skydoc_test(
+    name = "repo_rule_test",
+    golden_file = "testdata/repo_rules_test/golden.txt",
+    input_file = "testdata/repo_rules_test/input.bzl",
+    skydoc = "//src/main/java/com/google/devtools/build/skydoc",
+)
+
+skydoc_test(
     name = "unknown_name",
     golden_file = "testdata/unknown_name_test/golden.txt",
     input_file = "testdata/unknown_name_test/input.bzl",
@@ -153,4 +160,45 @@ skydoc_test(
     golden_file = "testdata/function_basic_test/golden.txt",
     input_file = "testdata/function_basic_test/input.bzl",
     skydoc = "//src/main/java/com/google/devtools/build/skydoc",
+)
+
+skydoc_test(
+    name = "module_test",
+    golden_file = "testdata/module_test/golden.txt",
+    input_file = "testdata/module_test/input.bzl",
+    skydoc = "//src/main/java/com/google/devtools/build/skydoc",
+)
+
+skydoc_test(
+    name = "module_test_with_whitelist",
+    golden_file = "testdata/module_test/golden.txt",
+    input_file = "testdata/module_test/input.bzl",
+    skydoc = "//src/main/java/com/google/devtools/build/skydoc",
+    whitelisted_symbols = [
+        "my_module",
+    ],
+)
+
+skydoc_test(
+    name = "macro_kwargs_test",
+    golden_file = "testdata/macro_kwargs_test/golden.txt",
+    input_file = "testdata/macro_kwargs_test/input.bzl",
+    skydoc = "//src/main/java/com/google/devtools/build/skydoc",
+)
+
+genrule(
+    name = "generate_bzl_test_dep",
+    srcs = ["testdata/generated_bzl_test/dep.bzl.tpl"],
+    outs = ["testdata/generated_bzl_test/dep.bzl"],
+    cmd = "cp $< $@",
+)
+
+skydoc_test(
+    name = "generated_bzl_test",
+    golden_file = "testdata/generated_bzl_test/golden.txt",
+    input_file = "testdata/generated_bzl_test/input.bzl",
+    skydoc = "//src/main/java/com/google/devtools/build/skydoc",
+    deps = [
+        "testdata/generated_bzl_test/dep.bzl",
+    ],
 )

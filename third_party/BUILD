@@ -1,5 +1,7 @@
 package(default_visibility = ["//visibility:public"])
 
+load("//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+
 filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
@@ -12,6 +14,7 @@ filegroup(
         "//third_party/iossim:srcs",
         "//third_party/grpc:srcs",
         "//third_party/jarjar:srcs",
+        "//third_party/jaxb:srcs",
         "//third_party/java/android_databinding:srcs",
         "//third_party/java/aosp_gradle_core:srcs",
         "//third_party/java/apkbuilder:srcs",
@@ -19,6 +22,7 @@ filegroup(
         "//third_party/java/j2objc:srcs",
         "//third_party/java/jacoco:srcs",
         "//third_party/java/javapoet:srcs",
+        "//third_party/java/java_tools:srcs",
         "//third_party/java/jcommander:srcs",
         "//third_party/java/jdk/langtools:srcs",
         "//third_party/java/proguard:srcs",
@@ -78,7 +82,7 @@ java_import(
         "android_common/com.android.tools.build_builder_2.0.0.jar",
         "android_common/com.android.tools.build_builder-model_2.0.0.jar",
         "android_common/com.android.tools.build_builder-test-api_2.0.0.jar",
-        "android_common/com.android.tools.build_manifest-merger_25.0.0.jar",
+        "android_common/com.android.tools.build_manifest-merger_25.0.0-patched.jar",
         "android_common/com.android.tools.external.lombok_lombok-ast_0.2.3.jar",
         # layoutlib has been upgraded to 26.1.2 *just* for font resource support.
         # We are unable to upgrade the other libraries yet due to internal
@@ -100,6 +104,9 @@ java_import(
         ":asm",
         ":asm-analysis",
         ":asm-tree",
+    ],
+    deps = [
+        "//third_party/jaxb",
     ],
 )
 
@@ -292,13 +299,27 @@ java_library(
 
 java_import(
     name = "auto_value_value",
-    jars = ["auto/auto-value-1.6.3rc1.jar", "auto/auto-value-annotations-1.6.3rc1.jar"],
+    jars = [
+        "auto/auto-value-1.6.3rc1.jar",
+        "auto/auto-value-annotations-1.6.3rc1.jar",
+    ],
 )
 
 # For bootstrapping JavaBuilder
 filegroup(
     name = "auto_value-jars",
-    srcs = ["auto/auto-value-1.6.3rc1.jar", "auto/auto-value-annotations-1.6.3rc1.jar"],
+    srcs = [
+        "auto/auto-value-1.6.3rc1.jar",
+        "auto/auto-value-annotations-1.6.3rc1.jar",
+    ],
+)
+
+java_import(
+    name = "byte_buddy",
+    jars = [
+        "bytebuddy/byte-buddy-1.9.7.jar",
+        "bytebuddy/byte-buddy-agent-1.9.7.jar",
+    ],
 )
 
 java_import(
@@ -438,11 +459,6 @@ java_import(
 )
 
 java_import(
-    name = "jgit",
-    jars = ["jgit/org.eclipse.jgit-4.10.0.201712302008-r.jar"],
-)
-
-java_import(
     name = "jimfs",
     jars = ["jimfs/jimfs-1.1.jar"],
 )
@@ -549,8 +565,18 @@ java_import(
 
 java_import(
     name = "mockito",
-    jars = ["mockito/mockito-all-1.10.19.jar"],
+    jars = ["mockito/mockito-core-2.25.1.jar"],
     deps = [
+        ":byte_buddy",
+        ":objenesis",
+    ],
+)
+
+java_import(
+    name = "mockito2",
+    jars = ["mockito/mockito-core-2.25.1.jar"],
+    deps = [
+        ":byte_buddy",
         ":objenesis",
     ],
 )
@@ -562,12 +588,7 @@ java_import(
 
 filegroup(
     name = "turbine_direct",
-    srcs = select({
-        "//src/conditions:darwin": ["turbine/turbine_direct.darwin"],
-        "//src/conditions:darwin_x86_64": ["turbine/turbine_direct.darwin"],
-        "//src/conditions:linux_x86_64": ["turbine/turbine_direct.linux"],
-        "//conditions:default": ["turbine/turbine_direct.jar"],
-    }),
+    srcs = ["turbine/turbine_direct.jar"],
 )
 
 java_import(
@@ -600,6 +621,31 @@ filegroup(
         "hamcrest/hamcrest-core-1.3.jar",
         "junit/junit-4.12.jar",
     ],
+)
+
+# Builds the remote Java tools archive. Not embedded or used in Bazel, but used
+# by the Java tools release process.
+genrule(
+    name = "java_tools_zip",
+    srcs = [
+        "//third_party/ijar:ijar_with_deps_zip",
+        "//third_party/java/java_tools:java_tools_zip",
+        ":zlib_zip",
+    ],
+    outs = ["java_tools.zip"],
+    cmd = "$(location //src:merge_zip_files) java_tools $@ $(SRCS)",
+    output_to_bindir = 1,
+    tools = ["//src:merge_zip_files"],
+)
+
+# Part of the Java tools remote archive. Not embedded or used in Bazel.
+genrule(
+    name = "zlib_zip",
+    srcs = ["//third_party/zlib:embedded_tools"],
+    outs = ["zlib.zip"],
+    cmd = "$(location //src:zip_files) zlib $@ $(SRCS)",
+    tools = ["//src:zip_files"],
+    visibility = ["//visibility:private"],
 )
 
 load(":compiler_config_setting.bzl", "create_compiler_config_setting")

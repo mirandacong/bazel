@@ -35,7 +35,7 @@ public final class CppFileTypes {
       FileTypeSet.of(CppFileTypes.CPP_SOURCE, CppFileTypes.C_SOURCE);
 
   public static final FileType CPP_HEADER =
-      FileType.of(".h", ".hh", ".hpp", ".ipp", ".hxx", ".inc");
+      FileType.of(".h", ".hh", ".hpp", ".ipp", ".hxx", ".inc", ".inl", ".H");
   public static final FileType PCH = FileType.of(".pch");
   public static final FileTypeSet OBJC_HEADER = FileTypeSet.of(CPP_HEADER, PCH);
   
@@ -209,11 +209,6 @@ public final class CppFileTypes {
       };
 
   public static final boolean headerDiscoveryRequired(Artifact source) {
-    // Sources from TreeArtifacts and TreeFileArtifacts will not generate dotd file.
-    if (source.isTreeArtifact() || source.hasParent()) {
-      return false;
-    }
-
     String fileName = source.getFilename();
     return !ASSEMBLER.matches(fileName)
         && !PIC_ASSEMBLER.matches(fileName)

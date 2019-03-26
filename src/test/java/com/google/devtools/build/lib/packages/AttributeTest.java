@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.analysis.util.TestAspects;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransitionProvider;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassNamePredicate;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
@@ -72,7 +73,7 @@ public class AttributeTest {
       attr("foo", Type.INTEGER).nonEmpty().value(3).build();
       fail();
     } catch (NullPointerException e) {
-      assertThat(e).hasMessage("attribute 'foo' must be a list");
+      assertThat(e).hasMessageThat().isEqualTo("attribute 'foo' must be a list");
     }
   }
 
@@ -90,7 +91,7 @@ public class AttributeTest {
       attr("foo", Type.INTEGER).singleArtifact().value(3).build();
       fail();
     } catch (IllegalStateException e) {
-      assertThat(e).hasMessage("attribute 'foo' must be a label-valued type");
+      assertThat(e).hasMessageThat().isEqualTo("attribute 'foo' must be a label-valued type");
     }
   }
 
@@ -309,6 +310,9 @@ public class AttributeTest {
     public SplitTransition apply(AttributeMap attrMapper) {
       return new TestSplitTransition();
     }
+
+    @Override
+    public void repr(SkylarkPrinter printer) {}
   }
 
   @Test

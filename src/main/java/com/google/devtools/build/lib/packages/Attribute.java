@@ -26,6 +26,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
@@ -40,6 +42,7 @@ import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassNamePre
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.skylarkbuildapi.SplitTransitionProviderApi;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.EvalUtils;
@@ -315,6 +318,11 @@ public final class Attribute implements Comparable<Attribute> {
     public SplitTransition apply(AttributeMap attributeMap) {
       return splitTransition;
     }
+
+    @Override
+    public void repr(SkylarkPrinter printer) {
+      printer.append("<transition object>");
+    }
   }
 
   /** A predicate class to check if the value of the attribute comes from a predefined set. */
@@ -323,7 +331,7 @@ public final class Attribute implements Comparable<Attribute> {
 
     private final Set<Object> allowedValues;
 
-    public <T> AllowedValueSet(T... values) {
+    public AllowedValueSet(Object... values) {
       this(Arrays.asList(values));
     }
 
@@ -381,6 +389,7 @@ public final class Attribute implements Comparable<Attribute> {
   @AutoCodec
   public static class ImmutableAttributeFactory {
     private final Type<?> type;
+    private final String doc;
     private final ConfigurationTransition configTransition;
     private final RuleClassNamePredicate allowedRuleClassesForLabels;
     private final RuleClassNamePredicate allowedRuleClassesForLabelsWarning;
@@ -399,6 +408,7 @@ public final class Attribute implements Comparable<Attribute> {
     @AutoCodec.VisibleForSerialization
     ImmutableAttributeFactory(
         Type<?> type,
+        String doc,
         ImmutableSet<PropertyFlag> propertyFlags,
         Object value,
         ConfigurationTransition configTransition,
@@ -414,6 +424,7 @@ public final class Attribute implements Comparable<Attribute> {
         RequiredProviders requiredProviders,
         ImmutableList<RuleAspect<?>> aspects) {
       this.type = type;
+      this.doc = doc;
       this.configTransition = configTransition;
       this.allowedRuleClassesForLabels = allowedRuleClassesForLabels;
       this.allowedRuleClassesForLabelsWarning = allowedRuleClassesForLabelsWarning;
@@ -442,6 +453,7 @@ public final class Attribute implements Comparable<Attribute> {
       Preconditions.checkState(!name.isEmpty(), "name has not been set");
       if (valueSource == AttributeValueSource.LATE_BOUND) {
         Preconditions.checkState(isLateBound(name));
+        Preconditions.checkState(splitTransitionProvider == null);
       }
       // TODO(bazel-team): Set the default to be no file type, then remove this check, and also
       // remove all allowedFileTypes() calls without parameters.
@@ -463,6 +475,7 @@ public final class Attribute implements Comparable<Attribute> {
 
       return new Attribute(
           name,
+          doc,
           type,
           propertyFlags,
           value,
@@ -495,6 +508,7 @@ public final class Attribute implements Comparable<Attribute> {
     private FileTypeSet allowedFileTypesForLabels;
     private ValidityPredicate validityPredicate = ANY_EDGE;
     private Object value;
+    private String doc;
     private AttributeValueSource valueSource = AttributeValueSource.DIRECT;
     private boolean valueSet;
     private Predicate<AttributeMap> condition;
@@ -675,6 +689,16 @@ public final class Attribute implements Comparable<Attribute> {
      */
     public Builder<TYPE> undocumented(String reason) {
       return setPropertyFlag(PropertyFlag.UNDOCUMENTED, "undocumented");
+    }
+
+    /**
+     * Set the doc string for the attribute.
+     *
+     * @param doc The doc string for this attribute.
+     */
+    public Builder<TYPE> setDoc(String doc) {
+      this.doc = doc;
+      return this;
     }
 
     /**
@@ -1170,6 +1194,7 @@ public final class Attribute implements Comparable<Attribute> {
 
       return new ImmutableAttributeFactory(
           type,
+          doc,
           Sets.immutableEnumSet(propertyFlags),
           valueSet ? value : type.getDefaultValue(),
           configTransition,
@@ -1299,13 +1324,13 @@ public final class Attribute implements Comparable<Attribute> {
         Rule rule,
         ComputationLimiter<TLimitException> limiter)
         throws TComputeException, TLimitException {
+      AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
       // This will hold every (value1, value2, ..) combination of the declared dependencies.
       // Collect those combinations.
-      AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
       List<Map<String, Object>> depMaps = mapper.visitAttributes(dependencies, limiter);
       // For each combination, call compute() on a specialized AttributeMap providing those
       // values.
-      Map<List<Object>, T> valueMap = new HashMap<>(depMaps.size());
+      Map<List<Object>, T> valueMap = Maps.newHashMapWithExpectedSize(depMaps.size());
       for (Map<String, Object> depMap : depMaps) {
         AttributeMap attrMap = mapper.createMapBackedAttributeMap(depMap);
         Object value = compute(attrMap);
@@ -1400,6 +1425,11 @@ public final class Attribute implements Comparable<Attribute> {
 
     <T> Iterable<T> getPossibleValues(Type<T> type, Rule rule) {
       final ComputedDefault owner = ComputedDefault.this;
+      if (dependencies.isEmpty()) {
+        AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
+        Object value = owner.getDefault(mapper.createMapBackedAttributeMap(ImmutableMap.of()));
+        return Lists.newArrayList(type.cast(value));
+      }
       ComputationStrategy<RuntimeException> strategy =
           new ComputationStrategy<RuntimeException>() {
             @Override
@@ -1706,10 +1736,8 @@ public final class Attribute implements Comparable<Attribute> {
       return (LateBoundDefault<Void, ValueT>) AlwaysNullLateBoundDefault.INSTANCE;
     }
 
-    protected LateBoundDefault(
-        boolean useHostConfiguration,
-        Class<FragmentT> fragmentClass,
-        ValueT defaultValue) {
+    LateBoundDefault(
+        boolean useHostConfiguration, Class<FragmentT> fragmentClass, ValueT defaultValue) {
       this.useHostConfiguration = useHostConfiguration;
       this.defaultValue = defaultValue;
       this.fragmentClass = fragmentClass;
@@ -1780,7 +1808,7 @@ public final class Attribute implements Comparable<Attribute> {
   public static class LabelLateBoundDefault<FragmentT>
       extends SimpleLateBoundDefault<FragmentT, Label> {
     @AutoCodec.VisibleForSerialization
-    LabelLateBoundDefault(
+    protected LabelLateBoundDefault(
         boolean useHostConfiguration,
         Class<FragmentT> fragmentClass,
         Label defaultValue,
@@ -1903,6 +1931,8 @@ public final class Attribute implements Comparable<Attribute> {
 
   private final String name;
 
+  private final String doc;
+
   private final Type<?> type;
 
   private final Set<PropertyFlag> propertyFlags;
@@ -1974,6 +2004,7 @@ public final class Attribute implements Comparable<Attribute> {
   @VisibleForSerialization
   Attribute(
       String name,
+      String doc,
       Type<?> type,
       Set<PropertyFlag> propertyFlags,
       Object defaultValue,
@@ -2004,20 +2035,8 @@ public final class Attribute implements Comparable<Attribute> {
           "a late bound default value using the host configuration must use the host transition");
     }
 
-    if (name.equals(FunctionSplitTransitionWhitelist.WHITELIST_ATTRIBUTE_NAME)) {
-      Preconditions.checkArgument(
-          BuildType.isLabelType(type),
-          "_whitelist_function_transition attribute must be a label");
-      Preconditions.checkArgument(
-          defaultValue != null,
-          "_whitelist_function_transition attribute must have a default value");
-      Preconditions.checkArgument(
-          ((Label) defaultValue).equals(FunctionSplitTransitionWhitelist.WHITELIST_LABEL),
-          "_whitelist_function_transition attribute does not have the expected value "
-          + FunctionSplitTransitionWhitelist.WHITELIST_LABEL);
-    }
-
     this.name = name;
+    this.doc = doc;
     this.type = type;
     this.propertyFlags = propertyFlags;
     this.defaultValue = defaultValue;
@@ -2031,21 +2050,23 @@ public final class Attribute implements Comparable<Attribute> {
     this.allowedValues = allowedValues;
     this.requiredProviders = requiredProviders;
     this.aspects = aspects;
-    this.hashCode = Objects.hash(
-        name,
-        type,
-        propertyFlags,
-        defaultValue,
-        configTransition,
-        splitTransitionProvider,
-        allowedRuleClassesForLabels,
-        allowedRuleClassesForLabelsWarning,
-        allowedFileTypesForLabels,
-        validityPredicate,
-        condition,
-        allowedValues,
-        requiredProviders,
-        aspects);
+    this.hashCode =
+        Objects.hash(
+            name,
+            doc,
+            type,
+            propertyFlags,
+            defaultValue,
+            configTransition,
+            splitTransitionProvider,
+            allowedRuleClassesForLabels,
+            allowedRuleClassesForLabelsWarning,
+            allowedFileTypesForLabels,
+            validityPredicate,
+            condition,
+            allowedValues,
+            requiredProviders,
+            aspects);
   }
 
   /**
@@ -2053,6 +2074,11 @@ public final class Attribute implements Comparable<Attribute> {
    */
   public String getName() {
     return name;
+  }
+
+  /** Returns the doc string for that attribute, if any. */
+  public String getDoc() {
+    return doc;
   }
 
   /**
@@ -2162,6 +2188,11 @@ public final class Attribute implements Comparable<Attribute> {
   public SplitTransition getSplitTransition(AttributeMap attributeMapper) {
     Preconditions.checkState(hasSplitConfigurationTransition());
     return splitTransitionProvider.apply(attributeMapper);
+  }
+
+  @VisibleForTesting
+  public SplitTransitionProvider getSplitTransitionProviderForTesting() {
+    return splitTransitionProvider;
   }
 
   /**
@@ -2341,7 +2372,7 @@ public final class Attribute implements Comparable<Attribute> {
    * or a late-bound default.
    */
   @VisibleForTesting
-  public Object getDefaultValueForTesting() {
+  public Object getDefaultValueUnchecked() {
     return defaultValue;
   }
 
@@ -2431,6 +2462,7 @@ public final class Attribute implements Comparable<Attribute> {
     Attribute attribute = (Attribute) o;
     return Objects.equals(hashCode, attribute.hashCode)
         && Objects.equals(name, attribute.name)
+        && Objects.equals(doc, attribute.doc)
         && Objects.equals(type, attribute.type)
         && Objects.equals(propertyFlags, attribute.propertyFlags)
         && Objects.equals(defaultValue, attribute.defaultValue)
@@ -2458,6 +2490,7 @@ public final class Attribute implements Comparable<Attribute> {
   public <TYPE> Attribute.Builder<TYPE> cloneBuilder(Type<TYPE> tp) {
     Preconditions.checkArgument(tp == this.type);
     Builder<TYPE> builder = new Builder<>(name, tp);
+    builder.doc = doc;
     builder.allowedFileTypesForLabels = allowedFileTypesForLabels;
     builder.allowedRuleClassesForLabels = allowedRuleClassesForLabels;
     builder.allowedRuleClassesForLabelsWarning = allowedRuleClassesForLabelsWarning;

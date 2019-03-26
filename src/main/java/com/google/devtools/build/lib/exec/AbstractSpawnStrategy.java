@@ -17,23 +17,25 @@ package com.google.devtools.build.lib.exec;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
-import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ActionStatusMessage;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
+import com.google.devtools.build.lib.actions.RunningActionEvent;
 import com.google.devtools.build.lib.actions.SandboxedSpawnActionContext;
+import com.google.devtools.build.lib.actions.SchedulingActionEvent;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.SpawnResult.Status;
 import com.google.devtools.build.lib.actions.Spawns;
+import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.exec.SpawnCache.CacheHandle;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
@@ -77,6 +79,11 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
   }
 
   @Override
+  public boolean canExec(Spawn spawn) {
+    return spawnRunner.canExec(spawn);
+  }
+
+  @Override
   public List<SpawnResult> exec(
       Spawn spawn,
       ActionExecutionContext actionExecutionContext,
@@ -98,20 +105,18 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
     }
     SpawnResult spawnResult;
     ExecException ex = null;
-    try {
-      try (CacheHandle cacheHandle = cache.lookup(spawn, context)) {
-        if (cacheHandle.hasResult()) {
-          spawnResult = Preconditions.checkNotNull(cacheHandle.getResult());
-        } else {
-          // Actual execution.
-          spawnResult = spawnRunner.execAsync(spawn, context).get();
-          if (cacheHandle.willStore()) {
-            cacheHandle.store(spawnResult);
-          }
+    try (CacheHandle cacheHandle = cache.lookup(spawn, context)) {
+      if (cacheHandle.hasResult()) {
+        spawnResult = Preconditions.checkNotNull(cacheHandle.getResult());
+      } else {
+        // Actual execution.
+        spawnResult = spawnRunner.execAsync(spawn, context).get();
+        if (cacheHandle.willStore()) {
+          cacheHandle.store(spawnResult);
         }
       }
     } catch (IOException e) {
-      throw new EnvironmentalExecException("Unexpected IO error.", e);
+      throw new EnvironmentalExecException("Unexpected IO error", e);
     } catch (SpawnExecException e) {
       ex = e;
       spawnResult = e.getSpawnResult();
@@ -183,17 +188,22 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
     }
 
     @Override
-    public void prefetchInputs() throws IOException {
+    public void prefetchInputs() throws IOException, InterruptedException {
       if (Spawns.shouldPrefetchInputsForLocalExecution(spawn)) {
         actionExecutionContext
             .getActionInputPrefetcher()
-            .prefetchFiles(getInputMapping(true).values());
+            .prefetchFiles(getInputMapping(true).values(), getMetadataProvider());
       }
     }
 
     @Override
     public MetadataProvider getMetadataProvider() {
       return actionExecutionContext.getMetadataProvider();
+    }
+
+    @Override
+    public MetadataHandler getMetadataInjector() {
+      return actionExecutionContext.getMetadataHandler();
     }
 
     @Override
@@ -260,14 +270,14 @@ public abstract class AbstractSpawnStrategy implements SandboxedSpawnActionConte
       }
 
       // TODO(ulfjack): We should report more details to the UI.
-      EventBus eventBus = actionExecutionContext.getEventBus();
+      ExtendedEventHandler eventHandler = actionExecutionContext.getEventHandler();
       switch (state) {
         case EXECUTING:
         case CHECKING_CACHE:
-          eventBus.post(ActionStatusMessage.runningStrategy(action, name));
+          eventHandler.post(new RunningActionEvent(action, name));
           break;
         case SCHEDULING:
-          eventBus.post(ActionStatusMessage.schedulingStrategy(action));
+          eventHandler.post(new SchedulingActionEvent(action, name));
           break;
         default:
           break;

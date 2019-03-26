@@ -348,12 +348,12 @@ EOF
   cd tree
 
   # Do initial load of the packages
-  bazel query --experimental_enable_repo_mapping --noexperimental_ui \
+  bazel query --noexperimental_ui \
         //oak:all >& "$TEST_log" || fail "Expected success"
   expect_log "Loading package: oak"
   expect_log "//oak:oak"
 
-  bazel query --experimental_enable_repo_mapping --noexperimental_ui \
+  bazel query --noexperimental_ui \
         @flower//daisy:all >& "$TEST_log" || fail "Expected success"
   expect_log "Loading package: @flower//daisy"
   expect_log "@flower//daisy:daisy"
@@ -369,13 +369,13 @@ local_repository(
 EOF
 
   # Test that packages in the tree workspace are not affected
-  bazel query --experimental_enable_repo_mapping --noexperimental_ui \
+  bazel query --noexperimental_ui \
         //oak:all >& "$TEST_log" || fail "Expected success"
   expect_not_log "Loading package: oak"
   expect_log "//oak:oak"
 
   # Test that packages in the flower workspace are reloaded
-  bazel query --experimental_enable_repo_mapping --noexperimental_ui \
+  bazel query --noexperimental_ui \
         @flower//daisy:all >& "$TEST_log" || fail "Expected success"
   expect_log "Loading package: @flower//daisy"
   expect_log "@flower//daisy:daisy"
@@ -412,7 +412,7 @@ genrule(name = "a",
 EOF
 
   cd main
-  bazel build --experimental_enable_repo_mapping @a//:a || fail "Expected build to succeed"
+  bazel build @a//:a || fail "Expected build to succeed"
   cat bazel-genfiles/external/a/result.txt
   grep "y_symbol" bazel-genfiles/external/a/result.txt \
       || fail "expected 'y_symbol' in $(cat bazel-genfiles/external/a/result.txt)"
@@ -453,7 +453,7 @@ foo_symbol = Y_SYMBOL
 EOF
 
   cd main
-  bazel build --experimental_enable_repo_mapping @a//:a || fail "Expected build to succeed"
+  bazel build @a//:a || fail "Expected build to succeed"
   grep "y_symbol" bazel-genfiles/external/a/result.txt \
       || fail "expected 'y_symbol' in $(cat bazel-genfiles/external/a/result.txt)"
 }
@@ -489,7 +489,7 @@ EOF
   touch main/BUILD
 
   cd main
-  bazel query --experimental_enable_repo_mapping --output=build @a//:a | grep "@b//:x.txt" \
+  bazel query --output=build @a//:a | grep "@b//:x.txt" \
       || fail "Expected srcs to contain '@b//:x.txt'"
 }
 
@@ -525,7 +525,7 @@ EOF
   touch main/BUILD
 
   cd main
-  bazel build --experimental_enable_repo_mapping @a//:a || fail "Expected build to succeed"
+  bazel build @a//:a || fail "Expected build to succeed"
   grep "external/b/x.txt" bazel-genfiles/external/a/result.txt \
       || fail "expected external/b/x.txt in $(cat bazel-genfiles/external/a/result.txt)"
 }
@@ -570,8 +570,76 @@ EOF
   touch main/BUILD
 
   cd main
-  bazel query --experimental_enable_repo_mapping --output=build @a//:a | grep "@b//:x.txt" \
+  bazel query --output=build @a//:a | grep "@b//:x.txt" \
       || fail "Expected srcs to contain '@b//:x.txt'"
+}
+
+function test_remapping_with_label_relative() {
+  # create foo repository
+  mkdir foo
+  touch foo/WORKSPACE
+  cat >foo/foo.bzl <<EOF
+x = Label("//blah:blah").relative("@a//:baz")
+print(x)
+EOF
+  cat >foo/BUILD <<EOF
+load(":foo.bzl", "x")
+genrule(
+  name = "bar",
+  outs = ["xyz"],
+  cmd = "touch \$(location xyz)",
+  visibility = ["//visibility:public"]
+)
+EOF
+
+  # Main repo assigns @a to @b within @foo
+  mkdir -p main
+  cat >main/WORKSPACE <<EOF
+workspace(name = "main")
+local_repository(name = "foo", path="../foo", repo_mapping = {"@a" : "@b"})
+local_repository(name = "b", path="../b")
+EOF
+  touch main/BUILD
+
+  cd main
+  bazel build @foo//:bar \
+      >& "$TEST_log" || fail "Expected build to succeed"
+  expect_log "@b//:baz"
+  expect_not_log "@a//:baz"
+}
+
+function test_remapping_label_constructor() {
+  # create foo repository
+  mkdir foo
+  touch foo/WORKSPACE
+  cat >foo/foo.bzl <<EOF
+x = Label("@a//blah:blah")
+print(x)
+EOF
+  cat >foo/BUILD <<EOF
+load(":foo.bzl", "x")
+genrule(
+  name = "bar",
+  outs = ["xyz"],
+  cmd = "touch \$(location xyz)",
+  visibility = ["//visibility:public"]
+)
+EOF
+
+  # Main repo assigns @a to @b within @foo
+  mkdir -p main
+  cat >main/WORKSPACE <<EOF
+workspace(name = "main")
+local_repository(name = "foo", path="../foo", repo_mapping = {"@a" : "@b"})
+local_repository(name = "b", path="../b")
+EOF
+  touch main/BUILD
+
+  cd main
+  bazel build @foo//:bar \
+      >& "$TEST_log" || fail "Expected build to succeed"
+  expect_log "@b//blah:blah"
+  expect_not_log "@a//blah:blah"
 }
 
 function test_workspace_addition_change_aspect() {
@@ -658,7 +726,7 @@ a = 1
 EOF
 
   cd mainrepo
-  bazel query --experimental_remap_main_repo //... &>"$TEST_log" \
+  bazel query --incompatible_remap_main_repo //... &>"$TEST_log" \
       || fail "Expected query to succeed"
   expect_log "def.bzl loaded"
   expect_not_log "external"
@@ -686,7 +754,7 @@ EOF
   # the bzl file should be loaded from the main workspace and
   # not as an external repository
   cd mainrepo
-  bazel query --experimental_remap_main_repo @a//... &>"$TEST_log" \
+  bazel query --incompatible_remap_main_repo @a//... &>"$TEST_log" \
       || fail "Expected query to succeed"
   expect_log "def.bzl loaded"
   expect_not_log "external"
@@ -704,7 +772,7 @@ EOF
   # now that @mainrepo doesn't exist within workspace "a",
   # the query should fail
   cd mainrepo
-  bazel query --experimental_remap_main_repo --experimental_enable_repo_mapping \
+  bazel query --incompatible_remap_main_repo \
       @a//... &>"$TEST_log" \
       && fail "Failure expected" || true
 }
@@ -726,6 +794,42 @@ function test_external_subpacakge() {
       || fail "expected completion of //external:local being reported"
   grep '"success".*true' completion.json \
       || fail "Success of //external:local expected"
+}
+
+function test_external_rule() {
+  # The repository rule for an external repository is visible as target
+  # under //external. Ensure we do not interpret it with a rule context
+  # instead of a repository rule context.
+  EXTREPODIR=`pwd`
+  mkdir true
+  echo 'int main(int argc, char **argv) { return 0;}' > true/main.c
+  echo 'cc_library(name="true", srcs=["main.c"])' > true/BUILD
+  tar cvf true.tar true
+  rm -rf true
+  mkdir extref
+  echo 'cc_binary(name="it", deps=["//external:true"])' > extref/BUILD
+  touch extref/WORKSPACE
+  mkdir main
+  cd main
+  cat > WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+  name="true",
+  urls=["${EXTREPODIR}/true.tar"],
+  strip_prefix="true",
+)
+
+local_repository(
+  name="extref",
+  path="../extref",
+)
+EOF
+  touch BUILD
+  bazel build @extref//:it >"${TEST_log}" 2>&1 && fail "expected failure" || :
+  expect_not_log 'download_and_extract'
+  expect_log 'http_archive.*workspace rule'
+  expect_log '//external:true.*build rule.*expected'
 }
 
 run_suite "workspace tests"

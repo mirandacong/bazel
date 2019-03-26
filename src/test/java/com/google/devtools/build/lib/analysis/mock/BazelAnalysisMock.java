@@ -13,9 +13,12 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.mock;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
+import com.google.common.io.MoreFiles;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.PlatformConfigurationLoader;
 import com.google.devtools.build.lib.analysis.ShellConfiguration;
@@ -46,8 +49,12 @@ import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.runfiles.Runfiles;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /** Subclass of {@link AnalysisMock} using Bazel-specific semantics. */
@@ -60,29 +67,52 @@ public final class BazelAnalysisMock extends AnalysisMock {
   @Override
   public List<String> getWorkspaceContents(MockToolsConfig config) {
     String bazelToolWorkspace = config.getPath("/bazel_tools_workspace").getPathString();
+    String localConfigPlatformWorkspace =
+        config.getPath("/local_config_platform_workspace").getPathString();
+
     return new ArrayList<>(
         ImmutableList.of(
             "local_repository(name = 'bazel_tools', path = '" + bazelToolWorkspace + "')",
             "local_repository(name = 'local_config_xcode', path = '/local_config_xcode')",
             "local_repository(name = 'com_google_protobuf', path = '/protobuf')",
             "bind(name = 'android/sdk', actual='@bazel_tools//tools/android:sdk')",
-            "bind(name = 'tools/python', actual='//tools/python')",
-            "register_toolchains('@bazel_tools//tools/cpp:all')"));
+            "register_toolchains('@bazel_tools//tools/cpp:all')",
+            "register_toolchains('@bazel_tools//tools/jdk:all')",
+            "register_toolchains('@bazel_tools//tools/python:all')",
+            "local_repository(name = 'local_config_platform', path = '"
+                + localConfigPlatformWorkspace
+                + "')"));
   }
 
   @Override
   public void setupMockClient(MockToolsConfig config) throws IOException {
     List<String> workspaceContents = getWorkspaceContents(config);
-    config.create(
-        "/local_config_xcode/BUILD", "xcode_config(name = 'host_xcodes')");
+    setupMockClient(config, workspaceContents);
+  }
+
+  @Override
+  public void setupMockClient(MockToolsConfig config, List<String> workspaceContents)
+      throws IOException {
+    config.create("/local_config_xcode/BUILD", "xcode_config(name = 'host_xcodes')");
     config.create(
         "/protobuf/BUILD", "licenses(['notice'])", "exports_files(['protoc', 'cc_toolchain'])");
     config.create("/local_config_xcode/WORKSPACE");
     config.create("/protobuf/WORKSPACE");
     config.overwrite("WORKSPACE", workspaceContents.toArray(new String[workspaceContents.size()]));
     config.create("/bazel_tools_workspace/WORKSPACE", "workspace(name = 'bazel_tools')");
+    Runfiles runfiles = Runfiles.create();
+    for (String filename :
+        Arrays.asList("tools/jdk/toolchain_utils.bzl", "tools/jdk/java_toolchain_alias.bzl")) {
+      java.nio.file.Path path = Paths.get(runfiles.rlocation("io_bazel/" + filename));
+      if (!Files.exists(path)) {
+        continue; // the io_bazel workspace root only exists for Bazel
+      }
+      config.create(
+          "/bazel_tools_workspace/" + filename, MoreFiles.asCharSource(path, UTF_8).read());
+    }
     config.create(
         "/bazel_tools_workspace/tools/jdk/BUILD",
+        "load(':java_toolchain_alias.bzl', 'java_host_runtime_alias')",
         "package(default_visibility=['//visibility:public'])",
         "java_toolchain(",
         "  name = 'toolchain',",
@@ -97,14 +127,39 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "  genclass = ['GenClass_deploy.jar'],",
         "  ijar = ['ijar'],",
         ")",
+        "java_toolchain(",
+        "  name = 'remote_toolchain',",
+        "  source_version = '8',",
+        "  target_version = '8',",
+        "  bootclasspath = [':bootclasspath'],",
+        "  extclasspath = [':extclasspath'],",
+        "  javac = [':langtools'],",
+        "  javabuilder = ['JavaBuilder_deploy.jar'],",
+        "  header_compiler = ['turbine_deploy.jar'],",
+        "  singlejar = ['SingleJar_deploy.jar'],",
+        "  genclass = ['GenClass_deploy.jar'],",
+        "  ijar = ['ijar'],",
+        ")",
+        "java_import(",
+        "  name = 'JacocoCoverageRunner',",
+        "  jars = ['JacocoCoverage_jarjar_deploy.jar'],",
+        ")",
+        "java_import(",
+        "  name = 'TestRunner',",
+        "  jars = ['TestRunner.jar'],",
+        ")",
+        "java_import(",
+        "  name = 'ExperimentalTestRunner',",
+        "  jars = ['ExperimentalTestRunner.jar'],",
+        ")",
         "java_runtime(name = 'jdk', srcs = [])",
         "java_runtime(name = 'host_jdk', srcs = [])",
         "java_runtime(name = 'remote_jdk', srcs = [])",
         "java_runtime(name = 'remote_jdk10', srcs = [])",
+        "java_runtime(name = 'remote_jdk11', srcs = [])",
+        "java_toolchain_alias(name = 'current_java_toolchain')",
         "java_runtime_alias(name = 'current_java_runtime')",
-        // This isn't actually the host runtime, but will do. This way, we don't need to pull in the
-        // Skylark implementation of the java_host_runtime_alias rule.
-        "java_runtime_alias(name = 'current_host_java_runtime')",
+        "java_host_runtime_alias(name = 'current_host_java_runtime')",
         "filegroup(name='langtools', srcs=['jdk/lib/tools.jar'])",
         "filegroup(name='bootclasspath', srcs=['jdk/jre/lib/rt.jar'])",
         "filegroup(name='extdir', srcs=glob(['jdk/jre/lib/ext/*']))",
@@ -114,7 +169,19 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "exports_files(['JavaBuilder_deploy.jar','SingleJar_deploy.jar','TestRunner_deploy.jar',",
         "               'JavaBuilderCanary_deploy.jar', 'ijar', 'GenClass_deploy.jar',",
         "               'turbine_deploy.jar','ExperimentalTestRunner_deploy.jar'])",
-        "sh_binary(name = 'proguard_whitelister', srcs = ['empty.sh'])");
+        "sh_binary(name = 'proguard_whitelister', srcs = ['empty.sh'])",
+        "toolchain_type(name = 'toolchain_type')",
+        "toolchain_type(name = 'runtime_toolchain_type')",
+        "toolchain(",
+        "   name = 'dummy_java_toolchain',",
+        "   toolchain_type = ':toolchain_type',",
+        "   toolchain = ':toolchain',",
+        ")",
+        "toolchain(",
+        "   name = 'dummy_java_runtime_toolchain',",
+        "   toolchain_type = ':runtime_toolchain_type',",
+        "   toolchain = ':jdk',",
+        ")");
 
     ImmutableList<String> androidBuildContents = createAndroidBuildContents();
     config.create(
@@ -135,6 +202,7 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "/bazel_tools_workspace/tools/test/BUILD",
         "filegroup(name = 'runtime', srcs = ['test-setup.sh', 'test-xml-generator.sh'])",
         "filegroup(name = 'test_wrapper', srcs = ['test_wrapper_bin'])",
+        "filegroup(name = 'xml_writer', srcs = ['xml_writer_bin'])",
         "filegroup(name = 'test_setup', srcs = ['test-setup.sh'])",
         "filegroup(name = 'test_xml_generator', srcs = ['test-xml-generator.sh'])",
         "filegroup(name = 'collect_coverage', srcs = ['collect_coverage.sh'])",
@@ -146,12 +214,6 @@ public final class BazelAnalysisMock extends AnalysisMock {
         "/bazel_tools_workspace/tools/test/CoverageOutputGenerator/java/com/google/devtools/coverageoutputgenerator/BUILD",
         "filegroup(name='srcs', srcs = glob(['**']))",
         "filegroup(name='Main', srcs = ['Main.java'])");
-
-    config.create(
-        "/bazel_tools_workspace/tools/python/BUILD",
-        "package(default_visibility=['//visibility:public'])",
-        "exports_files(['precompile.py'])",
-        "sh_binary(name='2to3', srcs=['2to3.sh'])");
 
     // Use an alias package group to allow for modification at the simpler path
     config.create(
@@ -305,7 +367,7 @@ public final class BazelAnalysisMock extends AnalysisMock {
 
   @Override
   public List<ConfigurationFragmentFactory> getDefaultConfigurationFragmentFactories() {
-    return ImmutableList.<ConfigurationFragmentFactory>of(
+    return ImmutableList.of(
         new CppConfigurationLoader(CpuTransformer.IDENTITY),
         new ShellConfiguration.Loader(
             BazelRuleClassProvider.SHELL_EXECUTABLE,
@@ -350,3 +412,4 @@ public final class BazelAnalysisMock extends AnalysisMock {
     repositoryHandlers.put(LocalConfigPlatformRule.NAME, new LocalConfigPlatformFunction());
   }
 }
+

@@ -22,13 +22,13 @@ import com.google.common.io.Files;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.ExecutorInitException;
 import com.google.devtools.build.lib.actions.SandboxedSpawnActionContext;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.exec.ExecutionPolicy;
@@ -316,6 +316,13 @@ public class DynamicSpawnStrategy implements SpawnActionContext {
     return dynamicExecutionResult.spawnResults();
   }
 
+  @Override
+  public boolean canExec(Spawn spawn) {
+    return remoteStrategy.canExec(spawn)
+        || workerStrategy.canExec(spawn)
+        || localStrategy.canExec(spawn);
+  }
+
   private void moveFileOutErr(ActionExecutionContext actionExecutionContext, FileOutErr outErr)
       throws IOException {
     if (outErr.getOutputPath().exists()) {
@@ -346,7 +353,7 @@ public class DynamicSpawnStrategy implements SpawnActionContext {
       throws ExecException, InterruptedException {
     SandboxedSpawnActionContext strategy;
     if (!WORKER_BLACKLISTED_MNEMONICS.contains(spawn.getMnemonic())
-        && "1".equals(spawn.getExecutionInfo().get(ExecutionRequirements.SUPPORTS_WORKERS))) {
+        && Spawns.supportsWorkers(spawn)) {
       strategy = Preconditions.checkNotNull(workerStrategy, "executorCreated not yet called");
     } else {
       strategy = Preconditions.checkNotNull(localStrategy, "executorCreated not yet called");

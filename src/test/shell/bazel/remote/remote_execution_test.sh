@@ -51,7 +51,7 @@ function set_up() {
 }
 
 function tear_down() {
-  bazel clean --expunge >& $TEST_log
+  bazel clean >& $TEST_log
   if [ -s "${pid_file}" ]; then
     local pid=$(cat "${pid_file}")
     kill "${pid}" || true
@@ -85,12 +85,13 @@ EOF
     || fail "Failed to build //a:test without remote execution"
   cp -f bazel-bin/a/test ${TEST_TMPDIR}/test_expected
 
-  bazel clean --expunge >& $TEST_log
+  bazel clean >& $TEST_log
   bazel build \
-      --spawn_strategy=remote \
+      --incompatible_list_based_execution_strategy_selection \
       --remote_executor=localhost:${worker_port} \
       //a:test >& $TEST_log \
       || fail "Failed to build //a:test with remote execution"
+  expect_log "2 processes: 2 remote"
   diff bazel-bin/a/test ${TEST_TMPDIR}/test_expected \
       || fail "Remote execution generated different result"
 }
@@ -119,6 +120,36 @@ EOF
       --spawn_strategy=remote \
       --remote_executor=localhost:${worker_port} \
       --test_output=errors \
+      --noexperimental_split_xml_generation \
+      //a:test >& $TEST_log \
+      || fail "Failed to run //a:test with remote execution"
+}
+
+function test_cc_test_split_xml() {
+  if [[ "$PLATFORM" == "darwin" ]]; then
+    # TODO(b/37355380): This test is disabled due to RemoteWorker not supporting
+    # setting SDKROOT and DEVELOPER_DIR appropriately, as is required of
+    # action executors in order to select the appropriate Xcode toolchain.
+    return 0
+  fi
+
+  mkdir -p a
+  cat > a/BUILD <<EOF
+package(default_visibility = ["//visibility:public"])
+cc_test(
+name = 'test',
+srcs = [ 'test.cc' ],
+)
+EOF
+  cat > a/test.cc <<EOF
+#include <iostream>
+int main() { std::cout << "Hello test!" << std::endl; return 0; }
+EOF
+  bazel test \
+      --spawn_strategy=remote \
+      --remote_executor=localhost:${worker_port} \
+      --test_output=errors \
+      --experimental_split_xml_generation \
       //a:test >& $TEST_log \
       || fail "Failed to run //a:test with remote execution"
 }
@@ -140,7 +171,7 @@ EOF
     || fail "Failed to build //a:test without remote cache"
   cp -f bazel-bin/a/test ${TEST_TMPDIR}/test_expected
 
-  bazel clean --expunge >& $TEST_log
+  bazel clean >& $TEST_log
   bazel build \
       --remote_cache=localhost:${worker_port} \
       //a:test >& $TEST_log \
@@ -166,7 +197,7 @@ EOF
       --remote_cache=localhost:${worker_port} \
       //a:test >& $TEST_log \
       || fail "Failed to build //a:test with remote gRPC cache service"
-  bazel clean --expunge >& $TEST_log
+  bazel clean >& $TEST_log
   bazel build \
       --remote_cache=localhost:${worker_port} \
       //a:test 2>&1 | tee $TEST_log | grep "remote cache hit" \
@@ -219,6 +250,77 @@ EOF
   expect_log "1 process: 1 local"
 }
 
+function test_local_fallback_with_local_strategy_lists() {
+  mkdir -p gen1
+  cat > gen1/BUILD <<'EOF'
+genrule(
+name = "gen1",
+srcs = [],
+outs = ["out1"],
+cmd = "touch \"$@\"",
+tags = ["no-remote"],
+)
+EOF
+
+  bazel build \
+      --incompatible_list_based_execution_strategy_selection \
+      --spawn_strategy=remote,local \
+      --remote_executor=localhost:${worker_port} \
+      --build_event_text_file=gen1.log \
+      //gen1 >& $TEST_log \
+      || fail "Expected success"
+
+  mv gen1.log $TEST_log
+  expect_log "1 process: 1 local"
+}
+
+function test_local_fallback_with_sandbox_strategy_lists() {
+  mkdir -p gen1
+  cat > gen1/BUILD <<'EOF'
+genrule(
+name = "gen1",
+srcs = [],
+outs = ["out1"],
+cmd = "touch \"$@\"",
+tags = ["no-remote"],
+)
+EOF
+
+  bazel build \
+      --incompatible_list_based_execution_strategy_selection \
+      --spawn_strategy=remote,sandboxed,local \
+      --remote_executor=localhost:${worker_port} \
+      --build_event_text_file=gen1.log \
+      //gen1 >& $TEST_log \
+      || fail "Expected success"
+
+  mv gen1.log $TEST_log
+  expect_log "1 process: 1 .*-sandbox"
+}
+
+function test_local_fallback_to_sandbox_by_default() {
+  mkdir -p gen1
+  cat > gen1/BUILD <<'EOF'
+genrule(
+name = "gen1",
+srcs = [],
+outs = ["out1"],
+cmd = "touch \"$@\"",
+tags = ["no-remote"],
+)
+EOF
+
+  bazel build \
+      --incompatible_list_based_execution_strategy_selection \
+      --remote_executor=localhost:${worker_port} \
+      --build_event_text_file=gen1.log \
+      //gen1 >& $TEST_log \
+      || fail "Expected success"
+
+  mv gen1.log $TEST_log
+  expect_log "1 process: 1 .*-sandbox"
+}
+
 function test_local_fallback_works_with_sandboxed_strategy() {
   mkdir -p gen2
   cat > gen2/BUILD <<'EOF'
@@ -248,13 +350,15 @@ function is_file_uploaded() {
   if [ -e "$cas_path/${h:0:64}" ]; then return 0; else return 1; fi
 }
 
-function test_failing_cc_test_grpc_cache() {
+function test_failed_test_outputs_not_uploaded() {
+  # Test that outputs of a failed test/action are not uploaded to the remote
+  # cache. This is a regression test for https://github.com/bazelbuild/bazel/issues/7232
   mkdir -p a
   cat > a/BUILD <<EOF
 package(default_visibility = ["//visibility:public"])
 cc_test(
-name = 'test',
-srcs = [ 'test.cc' ],
+  name = 'test',
+  srcs = [ 'test.cc' ],
 )
 EOF
   cat > a/test.cc <<EOF
@@ -266,50 +370,10 @@ EOF
       --test_output=errors \
       //a:test >& $TEST_log \
       && fail "Expected test failure" || true
-   $(is_file_uploaded bazel-testlogs/a/test/test.log) \
-     || fail "Expected test log to be uploaded to remote execution"
-   $(is_file_uploaded bazel-testlogs/a/test/test.xml) \
-     || fail "Expected test xml to be uploaded to remote execution"
-}
-
-function test_failing_cc_test_remote_spawn_cache() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-package(default_visibility = ["//visibility:public"])
-cc_test(
-name = 'test',
-srcs = [ 'test.cc' ],
-)
-EOF
-  cat > a/test.cc <<EOF
-#include <iostream>
-int main() { std::cout << "Fail me!" << std::endl; return 1; }
-EOF
-  bazel test \
-      --remote_cache=localhost:${worker_port} \
-      --test_output=errors \
-      //a:test >& $TEST_log \
-      && fail "Expected test failure" || true
-   $(is_file_uploaded bazel-testlogs/a/test/test.log) \
-     || fail "Expected test log to be uploaded to remote execution"
-   $(is_file_uploaded bazel-testlogs/a/test/test.xml) \
-     || fail "Expected test xml to be uploaded to remote execution"
-  # Check that logs are uploaded regardless of the spawn being cacheable.
-  # Re-running a changed test that failed once renders the test spawn uncacheable.
-  rm -f a/test.cc
-  cat > a/test.cc <<EOF
-#include <iostream>
-int main() { std::cout << "Fail me again!" << std::endl; return 1; }
-EOF
-  bazel test \
-      --remote_cache=localhost:${worker_port} \
-      --test_output=errors \
-      //a:test >& $TEST_log \
-      && fail "Expected test failure" || true
-   $(is_file_uploaded bazel-testlogs/a/test/test.log) \
-     || fail "Expected test log to be uploaded to remote execution"
-   $(is_file_uploaded bazel-testlogs/a/test/test.xml) \
-     || fail "Expected test xml to be uploaded to remote execution"
+   ($(is_file_uploaded bazel-testlogs/a/test/test.log) \
+     && fail "Expected test log to not be uploaded to remote execution") || true
+   ($(is_file_uploaded bazel-testlogs/a/test/test.xml) \
+     && fail "Expected test xml to not be uploaded to remote execution") || true
 }
 
 # Tests that the remote worker can return a 200MB blob that requires chunking.
@@ -333,7 +397,7 @@ EOF
     || fail "Failed to build //a:large_output without remote execution"
   cp -f bazel-genfiles/a/large_blob.txt ${TEST_TMPDIR}/large_blob_expected.txt
 
-  bazel clean --expunge >& $TEST_log
+  bazel clean >& $TEST_log
   bazel build \
       --spawn_strategy=remote \
       --remote_executor=localhost:${worker_port} \
@@ -644,7 +708,7 @@ function test_symlinks_in_directory_cache_only() {
           //:make-links &> $TEST_log \
           || fail "Failed to build //:make-links with remote cache service"
     expect_log "1 local"
-    bazel clean --expunge # Get rid of local results, rely on remote cache.
+    bazel clean # Get rid of local results, rely on remote cache.
     bazel build \
           --incompatible_remote_symlinks \
           --remote_cache=localhost:${worker_port} \

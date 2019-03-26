@@ -22,6 +22,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/rules/java:java-compilation",
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",
@@ -44,6 +45,18 @@ java_test(
 )
 
 java_test(
+    name = "AndroidSkylarkCommonTest",
+    srcs = ["AndroidSkylarkCommonTest.java"],
+    deps = [
+        ":AndroidBuildViewTestCase",
+        "//src/main/java/com/google/devtools/build/lib/rules/java:java-compilation",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
     name = "AndroidCommonTest",
     srcs = ["AndroidCommonTest.java"],
     deps = [
@@ -51,6 +64,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib:syntax",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//third_party:junit4",
         "//third_party:truth",
     ],
@@ -115,6 +129,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",
@@ -166,6 +181,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//src/test/java/com/google/devtools/build/lib:testutil",
         "//third_party:guava",
         "//third_party:junit4",
@@ -183,6 +199,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//src/test/java/com/google/devtools/build/lib:testutil",
         "//third_party:junit4",
         "//third_party:truth",
@@ -202,6 +219,7 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//src/test/java/com/google/devtools/build/lib:testutil",
         "//third_party:guava",
         "//third_party:junit4",
@@ -227,6 +245,7 @@ java_test(
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:analysis_testutil",
         "//src/test/java/com/google/devtools/build/lib:java_compile_action_test_helper",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//third_party:guava",
         "//third_party:junit4",
         "//third_party:truth",
@@ -303,6 +322,7 @@ java_test(
         "//src/main/protobuf:extra_actions_base_java_proto",
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
         "//src/test/java/com/google/devtools/build/lib:java_compile_action_test_helper",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//src/test/java/com/google/devtools/build/lib:testutil",
         "//third_party:guava",
         "//third_party:junit4",
@@ -326,6 +346,7 @@ java_library(
     name = "AbstractAndroidLocalTestTestBase",
     srcs = ["AbstractAndroidLocalTestTestBase.java"],
     deps = [
+        ":AndroidBuildViewTestCase",
         "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -343,12 +364,14 @@ java_library(
     srcs = ["AndroidLocalTestTest.java"],
     deps = [
         ":AbstractAndroidLocalTestTestBase",
+        ":AndroidBuildViewTestCase",
         "//src/main/java/com/google/devtools/build/lib:android-rules",
         "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib:util",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/rules/java:java-rules",
         "//src/test/java/com/google/devtools/build/lib:actions_testutil",
+        "//src/test/java/com/google/devtools/build/lib:packages_testutil",
         "//src/test/java/com/google/devtools/build/lib:testutil",
         "//third_party:guava",
         "//third_party:junit4",

@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.testutil;
 
+import static com.google.devtools.build.lib.rules.cpp.CppRuleClasses.CROSSTOOL_LABEL;
+
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.packages.BuilderFactoryForTesting;
 import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
@@ -23,6 +25,7 @@ import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
  * Various constants required by the tests.
  */
 public class TestConstants {
+
   private TestConstants() {
   }
 
@@ -110,11 +113,22 @@ public class TestConstants {
   public static final ImmutableList<String> OSX_CROSSTOOL_FLAGS =
       ImmutableList.of();
 
-  public static final InvocationPolicy TEST_INVOCATION_POLICY =
-      InvocationPolicy.getDefaultInstance();
+  /**
+   * Flags that must be set for Bazel to work properly, if the default values are unusable for
+   * some reason.
+   */
+  public static final ImmutableList<String> PRODUCT_SPECIFIC_FLAGS =
+      ImmutableList.of();
 
   public static final BuilderFactoryForTesting PACKAGE_FACTORY_BUILDER_FACTORY_FOR_TESTING =
       PackageFactoryBuilderFactoryForBazelUnitTests.INSTANCE;
+
+  /** Partial query to filter out implicit dependencies of C/C++ rules. */
+  public static final String CC_DEPENDENCY_CORRECTION =
+      " - deps(" + TOOLS_REPOSITORY + CROSSTOOL_LABEL + ")";
+
+  public static final String PLATFORM_LABEL =
+      "@bazel_tools//platforms:host_platform + @bazel_tools//platforms:target_platform";
 
   /** A choice of test execution mode, only varies internally. */
   public enum InternalTestExecutionMode {

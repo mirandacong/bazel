@@ -17,17 +17,16 @@ package com.google.devtools.build.lib.rules.repository;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.FileValue;
-import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelConstants;
 import com.google.devtools.build.lib.packages.BazelLibrary;
 import com.google.devtools.build.lib.packages.BuildFileContainsErrorsException;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.rules.repository.ResolvedFileValue.ResolvedFileKey;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
-import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
@@ -47,8 +46,8 @@ public class ResolvedFileFunction implements SkyFunction {
       throws InterruptedException, SkyFunctionException {
 
     ResolvedFileKey key = (ResolvedFileKey) skyKey;
-    SkylarkSemantics skylarkSemantics = PrecomputedValue.SKYLARK_SEMANTICS.get(env);
-    if (skylarkSemantics == null) {
+    StarlarkSemantics starlarkSemantics = PrecomputedValue.STARLARK_SEMANTICS.get(env);
+    if (starlarkSemantics == null) {
       return null;
     }
     FileValue fileValue = (FileValue) env.getValue(FileValue.key(key.getPath()));
@@ -70,20 +69,20 @@ public class ResolvedFileFunction implements SkyFunction {
         if (ast.containsErrors()) {
           throw new ResolvedFileFunctionException(
               new BuildFileContainsErrorsException(
-                  Label.EXTERNAL_PACKAGE_IDENTIFIER,
+                  LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
                   "Failed to parse file resolved file " + key.getPath()));
         }
         com.google.devtools.build.lib.syntax.Environment resolvedEnvironment;
         try (Mutability mutability = Mutability.create("resolved file %s", key.getPath())) {
           resolvedEnvironment =
               com.google.devtools.build.lib.syntax.Environment.builder(mutability)
-                  .setSemantics(skylarkSemantics)
+                  .setSemantics(starlarkSemantics)
                   .setGlobals(BazelLibrary.GLOBALS)
                   .build();
           if (!ast.exec(resolvedEnvironment, env.getListener())) {
             throw new ResolvedFileFunctionException(
                 new BuildFileContainsErrorsException(
-                    Label.EXTERNAL_PACKAGE_IDENTIFIER,
+                    LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
                     "Failed to evaluate resolved file " + key.getPath()));
           }
         }
@@ -91,24 +90,25 @@ public class ResolvedFileFunction implements SkyFunction {
         if (resolved == null) {
           throw new ResolvedFileFunctionException(
               new BuildFileContainsErrorsException(
-                  Label.EXTERNAL_PACKAGE_IDENTIFIER,
+                  LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
                   "Symbol 'resolved' not exported in resolved file " + key.getPath()));
         }
         if (!(resolved instanceof List)) {
           throw new ResolvedFileFunctionException(
               new BuildFileContainsErrorsException(
-                  Label.EXTERNAL_PACKAGE_IDENTIFIER,
-                      "Symbol 'resolved' in resolved file " + key.getPath() + " not a list"));
+                  LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
+                  "Symbol 'resolved' in resolved file " + key.getPath() + " not a list"));
         }
         ImmutableList.Builder<Map<String, Object>> result
             = new ImmutableList.Builder<Map<String, Object>>();
         for (Object entry : (List) resolved) {
           if (!(entry instanceof Map)) {
-          throw new ResolvedFileFunctionException(
-              new BuildFileContainsErrorsException(
-                  Label.EXTERNAL_PACKAGE_IDENTIFIER,
-                      "Symbol 'resolved' in resolved file " + key.getPath()
-                      + " contains a non-map entry"));
+            throw new ResolvedFileFunctionException(
+                new BuildFileContainsErrorsException(
+                    LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
+                    "Symbol 'resolved' in resolved file "
+                        + key.getPath()
+                        + " contains a non-map entry"));
           }
           ImmutableMap.Builder<String, Object> entryBuilder
               = new ImmutableMap.Builder<String, Object>();
@@ -117,8 +117,9 @@ public class ResolvedFileFunction implements SkyFunction {
             if (!(attribute instanceof String)) {
               throw new ResolvedFileFunctionException(
                   new BuildFileContainsErrorsException(
-                      Label.EXTERNAL_PACKAGE_IDENTIFIER,
-                          "Symbol 'resolved' in resolved file " + key.getPath()
+                      LabelConstants.EXTERNAL_PACKAGE_IDENTIFIER,
+                      "Symbol 'resolved' in resolved file "
+                          + key.getPath()
                           + " contains a non-string key in one of its entries"));
             }
             entryBuilder.put((String) attribute, keyValue.getValue());

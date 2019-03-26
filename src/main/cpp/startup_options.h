@@ -14,6 +14,10 @@
 #ifndef BAZEL_SRC_MAIN_CPP_STARTUP_OPTIONS_H_
 #define BAZEL_SRC_MAIN_CPP_STARTUP_OPTIONS_H_
 
+#if defined(__APPLE__)
+#include <sys/qos.h>
+#endif
+
 #include <map>
 #include <memory>
 #include <set>
@@ -257,15 +261,6 @@ class StartupOptions {
 
   bool write_command_log;
 
-  // If true, Bazel will use SimpleLogHandler for the server log, meaning that
-  // each time a Bazel server process starts, it will create a new log file and
-  // update java.log to be a symbolic link to the new log file.
-  // TODO(b/118755753): The --norotating_server_log option is intended as a
-  // temporary "escape hatch" in case switching to the rotating SimpleLogHandler
-  // breaks things. Remove the option and associated logic once we are confident
-  // that the "escape hatch" is not needed.
-  bool rotating_server_log;
-
   // If true, Blaze will listen to OS-level file change notifications.
   bool watchfs;
 
@@ -294,8 +289,10 @@ class StartupOptions {
   // Connection timeout for each gRPC connection attempt.
   int connect_timeout_secs;
 
-  // Invocation policy proto. May be NULL.
-  const char *invocation_policy;
+  // Invocation policy proto, or an empty string.
+  std::string invocation_policy;
+  // Invocation policy can only be specified once.
+  bool have_invocation_policy_;
 
   // Whether to output addition debugging information in the client.
   bool client_debug;
@@ -317,6 +314,11 @@ class StartupOptions {
   // Whether to raise the soft coredump limit to the hard one or not.
   bool unlimit_coredumps;
 
+#if defined(__APPLE__)
+  // The QoS class to apply to the Bazel server process.
+  qos_class_t macos_qos_class;
+#endif
+
  protected:
   // Constructor for subclasses only so that site-specific extensions of this
   // class can override the product name.  The product_name must be the
@@ -333,10 +335,6 @@ class StartupOptions {
   std::string default_server_javabase_;
   // Contains the collection of startup flags that Bazel accepts.
   std::set<std::unique_ptr<StartupFlag>> valid_startup_flags;
-
-#if defined(_WIN32) || defined(__CYGWIN__)
-  static std::string WindowsUnixRoot(const std::string &bazel_sh);
-#endif
 };
 
 }  // namespace blaze

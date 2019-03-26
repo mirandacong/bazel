@@ -16,18 +16,21 @@ package com.google.devtools.build.lib.analysis.config;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.events.StoredEventHandler;
+import com.google.devtools.build.lib.packages.StructImpl;
 import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigurationTransitionApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
+import com.google.devtools.build.lib.skylarkinterface.StarlarkContext;
 import com.google.devtools.build.lib.syntax.BaseFunction;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.SkylarkDict;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Implementation of {@link ConfigurationTransitionApi}.
@@ -39,12 +42,14 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
   private final List<String> inputs;
   private final List<String> outputs;
   private final Location location;
+  private final StoredEventHandler eventHandler;
 
   private StarlarkDefinedConfigTransition(
       List<String> inputs, List<String> outputs, Location location) {
     this.inputs = inputs;
     this.outputs = outputs;
     this.location = location;
+    this.eventHandler = new StoredEventHandler();
   }
 
   /**
@@ -54,17 +59,16 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
   public abstract Boolean isForAnalysisTesting();
 
   /**
-   * Returns the input option keys for this transition. Only option keys contained in this
-   * list will be provided in the 'settings' argument given to the transition implementation
-   * function.
+   * Returns the input option keys for this transition. Only option keys contained in this list will
+   * be provided in the 'settings' argument given to the transition implementation function.
    */
   public List<String> getInputs() {
     return inputs;
   }
 
   /**
-   * Returns the output option keys for this transition. The transition implementation function
-   * must return a dictionary where the option keys exactly match the elements of this list.
+   * Returns the output option keys for this transition. The transition implementation function must
+   * return a dictionary where the option keys exactly match the elements of this list.
    */
   public List<String> getOutputs() {
     return outputs;
@@ -76,6 +80,10 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
    */
   public Location getLocationForErrorReporting() {
     return location;
+  }
+
+  public StoredEventHandler getEventHandler() {
+    return eventHandler;
   }
 
   /**
@@ -91,15 +99,16 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
    * @throws InterruptedException if evaluating the transition is interrupted
    */
   public abstract ImmutableList<Map<String, Object>> getChangedSettings(
-      Map<String, Object> previousSettings) throws EvalException, InterruptedException;
+      Map<String, Object> previousSettings, StructImpl attributeMap)
+      throws EvalException, InterruptedException;
 
   public static StarlarkDefinedConfigTransition newRegularTransition(
       BaseFunction impl,
       List<String> inputs,
       List<String> outputs,
-      SkylarkSemantics semantics,
-      EventHandler eventHandler) {
-    return new RegularTransition(impl, inputs, outputs, semantics, eventHandler);
+      StarlarkSemantics semantics,
+      StarlarkContext context) {
+    return new RegularTransition(impl, inputs, outputs, semantics, context);
   }
 
   public static StarlarkDefinedConfigTransition newAnalysisTestTransition(
@@ -122,7 +131,7 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
 
     @Override
     public ImmutableList<Map<String, Object>> getChangedSettings(
-        Map<String, Object> previousSettings) {
+        Map<String, Object> previousSettings, StructImpl attributeMapper) {
       return ImmutableList.of(changedSettings);
     }
 
@@ -130,23 +139,43 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
     public void repr(SkylarkPrinter printer) {
       printer.append("<analysis_test_transition object>");
     }
+
+    @Override
+    public boolean equals(Object object) {
+      if (object == this) {
+        return true;
+      }
+      if (object instanceof AnalysisTestTransition) {
+        AnalysisTestTransition otherTransition = (AnalysisTestTransition) object;
+        return Objects.equals(otherTransition.getInputs(), this.getInputs())
+            && Objects.equals(otherTransition.getOutputs(), this.getOutputs())
+            && Objects.equals(otherTransition.changedSettings, this.changedSettings);
+      }
+      return false;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(this.getInputs(), this.getOutputs(), this.changedSettings);
+    }
   }
 
-  private static class RegularTransition extends StarlarkDefinedConfigTransition {
+  /** A transition with a user-defined implementation function. */
+  public static class RegularTransition extends StarlarkDefinedConfigTransition {
     private final BaseFunction impl;
-    private final SkylarkSemantics semantics;
-    private final EventHandler eventHandler;
+    private final StarlarkSemantics semantics;
+    private final StarlarkContext starlarkContext;
 
-    public RegularTransition(
+    RegularTransition(
         BaseFunction impl,
         List<String> inputs,
         List<String> outputs,
-        SkylarkSemantics semantics,
-        EventHandler eventHandler) {
+        StarlarkSemantics semantics,
+        StarlarkContext context) {
       super(inputs, outputs, impl.getLocation());
       this.impl = impl;
       this.semantics = semantics;
-      this.eventHandler = eventHandler;
+      this.starlarkContext = context;
     }
 
     @Override
@@ -156,10 +185,11 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
 
     @Override
     public ImmutableList<Map<String, Object>> getChangedSettings(
-        Map<String, Object> previousSettings) throws EvalException, InterruptedException {
+        Map<String, Object> previousSettings, StructImpl attributeMapper)
+        throws EvalException, InterruptedException {
       Object result;
       try {
-        result = evalFunction(impl, previousSettings);
+        result = evalFunction(impl, ImmutableList.of(previousSettings, attributeMapper));
       } catch (EvalException e) {
         throw new EvalException(impl.getLocation(), e.getMessage());
       }
@@ -209,17 +239,37 @@ public abstract class StarlarkDefinedConfigTransition implements ConfigurationTr
     }
 
     /** Evaluate the input function with the given argument, and return the return value. */
-    private Object evalFunction(BaseFunction function, Object arg)
+    private Object evalFunction(BaseFunction function, ImmutableList<Object> args)
         throws InterruptedException, EvalException {
       try (Mutability mutability = Mutability.create("eval_transition_function")) {
         Environment env =
             Environment.builder(mutability)
                 .setSemantics(semantics)
-                .setEventHandler(eventHandler)
+                .setEventHandler(getEventHandler())
+                .setStarlarkContext(starlarkContext)
                 .build();
 
-        return function.call(ImmutableList.of(arg), ImmutableMap.of(), null, env);
+        return function.call(args, ImmutableMap.of(), null, env);
       }
+    }
+
+    @Override
+    public boolean equals(Object object) {
+      if (object == this) {
+        return true;
+      }
+      if (object instanceof RegularTransition) {
+        RegularTransition otherTransition = (RegularTransition) object;
+        return Objects.equals(otherTransition.getInputs(), this.getInputs())
+            && Objects.equals(otherTransition.getOutputs(), this.getOutputs())
+            && Objects.equals(otherTransition.impl, this.impl);
+      }
+      return false;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(this.getInputs(), this.getOutputs(), this.impl);
     }
   }
 }

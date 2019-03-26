@@ -396,8 +396,8 @@ public final class CppConfiguration extends BuildConfiguration.Fragment
     return cppOptions.legacyWholeArchive;
   }
 
-  public boolean getSymbolCounts() {
-    return cppOptions.symbolCounts;
+  public boolean removeLegacyWholeArchive() {
+    return cppOptions.removeLegacyWholeArchive;
   }
 
   public boolean getInmemoryDotdFiles() {
@@ -408,7 +408,7 @@ public final class CppConfiguration extends BuildConfiguration.Fragment
     return cppOptions.parseHeadersVerifiesModules;
   }
 
-  public boolean getUseInterfaceSharedObjects() {
+  public boolean getUseInterfaceSharedLibraries() {
     return cppOptions.useInterfaceSharedObjects;
   }
 
@@ -548,24 +548,24 @@ public final class CppConfiguration extends BuildConfiguration.Fragment
     return cppOptions.disableLegacyCrosstoolFields;
   }
 
-  public boolean disableCompilationModeFlags() {
-    return cppOptions.disableCompilationModeFlags;
+  public boolean disableExpandIfAllAvailableInFlagSet() {
+    return cppOptions.disableExpandIfAllAvailableInFlagSet;
   }
 
-  public boolean disableLinkingModeFlags() {
-    return cppOptions.disableLinkingModeFlags;
-  }
-
-  public boolean enableLinkoptsInUserLinkFlags() {
-    return cppOptions.enableLinkoptsInUserLinkFlags;
-  }
-
-  public boolean disableEmittingStaticLibgcc() {
-    return cppOptions.disableEmittingStaticLibgcc;
+  public static String getLegacyCrosstoolFieldErrorMessage(String field) {
+    Preconditions.checkNotNull(field);
+    return field
+        + " is disabled by --incompatible_disable_legacy_crosstool_fields, please "
+        + "migrate your CROSSTOOL (see https://github.com/bazelbuild/bazel/issues/6861 for "
+        + "migration instructions).";
   }
 
   public boolean disableDepsetInUserFlags() {
     return cppOptions.disableDepsetInUserFlags;
+  }
+
+  public boolean removeCpuCompilerCcToolchainAttributes() {
+    return cppOptions.removeCpuCompilerCcToolchainAttributes;
   }
 
   public static PathFragment computeDefaultSysroot(String builtInSysroot) {
@@ -579,10 +579,6 @@ public final class CppConfiguration extends BuildConfiguration.Fragment
     return PathFragment.create(builtInSysroot);
   }
 
-  boolean enableCcToolchainConfigInfoFromSkylark() {
-    return cppOptions.enableCcToolchainConfigInfoFromSkylark;
-  }
-
   /**
    * Returns the value of the libc top-level directory (--grte_top) as specified on the command line
    */
@@ -592,5 +588,21 @@ public final class CppConfiguration extends BuildConfiguration.Fragment
 
   public boolean disableGenruleCcToolchainDependency() {
     return cppOptions.disableGenruleCcToolchainDependency;
+  }
+
+  public boolean enableLegacyCcProvider() {
+    return !cppOptions.disableLegacyCcProvider;
+  }
+
+  public boolean disableCrosstool() {
+    return cppOptions.disableCrosstool;
+  }
+
+  public boolean dontEnableHostNonhost() {
+    return cppOptions.dontEnableHostNonhost;
+  }
+
+  public boolean disableCcContextQuoteIncludesHook() {
+    return cppOptions.disableCcContextQuoteIncludesHook;
   }
 }

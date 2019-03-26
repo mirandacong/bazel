@@ -36,7 +36,7 @@ import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.skyframe.BuildInfoCollectionValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.WorkspaceStatusValue;
-import com.google.devtools.build.lib.syntax.SkylarkSemantics;
+import com.google.devtools.build.lib.syntax.StarlarkSemantics;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import java.io.PrintWriter;
@@ -68,6 +68,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
    */
   private final boolean isSystemEnv;
   private final boolean extendedSanityChecks;
+  private final boolean allowAnalysisFailures;
 
   private final ActionKeyContext actionKeyContext;
 
@@ -89,6 +90,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
       ArtifactOwner owner,
       boolean isSystemEnv,
       boolean extendedSanityChecks,
+      boolean allowAnalysisFailures,
       ExtendedEventHandler errorEventListener,
       SkyFunction.Environment env) {
     this.artifactFactory = artifactFactory;
@@ -96,6 +98,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
     this.owner = Preconditions.checkNotNull(owner);
     this.isSystemEnv = isSystemEnv;
     this.extendedSanityChecks = extendedSanityChecks;
+    this.allowAnalysisFailures = allowAnalysisFailures;
     this.errorEventListener = errorEventListener;
     this.skyframeEnv = env;
     middlemanFactory = new MiddlemanFactory(artifactFactory, this);
@@ -103,7 +106,7 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   }
 
   public void disable(Target target) {
-    if (!hasErrors()) {
+    if (!hasErrors() && !allowAnalysisFailures) {
       verifyGeneratedArtifactHaveActions(target);
     }
     artifacts = null;
@@ -305,8 +308,8 @@ public class CachingAnalysisEnvironment implements AnalysisEnvironment {
   }
 
   @Override
-  public SkylarkSemantics getSkylarkSemantics() throws InterruptedException {
-    return PrecomputedValue.SKYLARK_SEMANTICS.get(skyframeEnv);
+  public StarlarkSemantics getSkylarkSemantics() throws InterruptedException {
+    return PrecomputedValue.STARLARK_SEMANTICS.get(skyframeEnv);
   }
 
   @Override

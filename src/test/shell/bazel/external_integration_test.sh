@@ -504,16 +504,6 @@ EOF
   diff bazel-genfiles/timestamp first_timestamp || fail "Output was built again"
 }
 
-function test_invalid_rule() {
-  # http_jar with missing URL field.
-  cat > WORKSPACE <<EOF
-http_jar(name = 'endangered', sha256 = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9826')
-EOF
-
-  bazel fetch //external:endangered >& $TEST_log && fail "Expected fetch to fail"
-  expect_log "missing value for mandatory attribute 'url' in 'http_jar' rule"
-}
-
 function test_new_remote_repo_with_build_file() {
   do_new_remote_repo_test "build_file"
 }
@@ -911,7 +901,7 @@ http_archive(
 )
 EOF
   bazel build @repo//... &> $TEST_log && fail "Expected to fail"
-  expect_log "Invalid SHA256 checksum"
+  expect_log "[Ii]nvalid SHA256 checksum"
   shutdown_server
 }
 
@@ -1420,6 +1410,110 @@ EOF
   expect_log '@ext//:foo'
 }
 
+function test_cache_hit_reported() {
+  # Verify that information about a chache hit is reported
+  # if an error happend in that repository. This information
+  # is useful as users sometimes change the URL but do not
+  # update the hash.
+  WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
+  cd "${WRKDIR}"
+  mkdir ext-1.1
+  cat > ext-1.1/BUILD <<'EOF'
+genrule(
+  name="foo",
+  outs=["foo.txt"],
+  cmd="echo Hello World > $@",
+  visibility = ["//visibility:public"],
+)
+EOF
+  zip ext-1.1.zip ext-1.1/*
+  rm -rf ext-1.1
+  sha256=$(sha256sum ext-1.1.zip | head -c 64)
+
+  rm -rf main
+  mkdir main
+  cd main
+  cat > WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+  name="ext",
+  strip_prefix="ext-1.1",
+  urls=["file://${WRKDIR}/ext-1.1.zip"],
+  sha256="${sha256}",
+)
+EOF
+  cat > BUILD <<'EOF'
+genrule(
+  name = "it",
+  srcs = ["@ext//:foo"],
+  outs = ["it.txt"],
+  cmd = "cp $< $@"
+)
+EOF
+
+  echo "Build #1"
+
+  # build to fill the cache
+  bazel build //:it || fail "Expected success"
+
+  # go offline and clean everything
+  bazel clean --expunge
+  rm "${WRKDIR}/ext-1.1.zip"
+
+  echo "Build #2"
+
+  # We still should be able to build, as the file is in cache
+  bazel build //:it > "${TEST_log}" 2>&1 || fail "Expected success"
+  # As a cache hit is a perfectly normal thing, we don't expect it to be
+  # reported.
+  expect_not_log 'cache hit'
+  expect_not_log "${sha256}"
+  expect_not_log 'file:.*/ext-1.1.zip'
+
+  # Now update ext-1.1 to ext-1.2, while forgetting to update the checksum
+  ed WORKSPACE <<EOI
+%s/ext-1\.1/ext-1\.2/g
+w
+q
+EOI
+
+  echo "Build #3"
+
+  # The build should fail, as the prefix is not found. The available prefix
+  # should be reported as well as the information that the file was taken
+  # from cache.
+  bazel build //:it > "${TEST_log}" 2>&1 && fail "Should not succeed" || :
+  expect_log 'ext-1.2.*not found'
+  expect_log 'prefixes.*ext-1.1'
+  expect_log 'cache hit'
+  expect_log "${sha256}"
+  expect_log 'file:.*/ext-1.2.zip'
+
+  # Now consider the case where no prefix is specified (and hence, the
+  # download_and_extract call will succeed), but a patch command has
+  # an assumption on a wrong path. As the fetching of the external
+  # repository will fail, we still expect being hinted at the
+  # cache hit.
+  ed WORKSPACE <<'EOI'
+/strip_prefix
+d
+a
+patch_cmds = ["cp ext-1.2/foo.txt ext-1.2/BUILD ."],
+.
+w
+q
+EOI
+
+  echo "Build #4"
+
+  bazel build //:it > "${TEST_log}" 2>&1 && fail "Should not succeed" || :
+  expect_not_log 'prefix'
+  expect_log 'cp ext-1.2/foo.txt ext-1.2/BUILD'
+  expect_log 'cache hit'
+  expect_log "${sha256}"
+  expect_log 'file:.*/ext-1.2.zip'
+}
+
 function test_distdir() {
   WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
   cd "${WRKDIR}"
@@ -1717,5 +1811,108 @@ EOF
   expect_log "foo.*First action"
   expect_log "foo.*Second action"
 }
+
+function test_progress_reporting() {
+  # Isse 7353 requested that even in the case of a syntactically invalid
+  # checksum, the file still should be fetched and its checksum computed.
+  WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
+  cd "${WRKDIR}"
+
+  touch ext.tar
+
+  mkdir main
+  cd main
+  cat > WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+  name = "ext",
+  urls = ["file://${WRKDIR}/ext.tar"],
+  sha256 = "badargument",
+)
+EOF
+  cat > BUILD <<'EOF'
+genrule(
+  name = "it",
+  srcs = ["@ext//:in.txt"],
+  outs = ["out.txt"],
+  cmd = "cp $< $@",
+)
+EOF
+
+  bazel build //:it > "${TEST_log}" 2>&1 && fail "Expected failure" || :
+
+  expect_log '@ext.*badargument'
+  expect_log 'SHA256 (.*/ext.tar) = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+}
+
+function test_prefix_suggestions() {
+  # Verify that useful suggestions are made if an expected prefix
+  # is not found in an archive.
+  WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
+  cd "${WRKDIR}"
+
+  mkdir -p ext-1.1/foo
+  touch ext-1.1/foo.txt
+
+  tar cvf ext.tar ext-1.1
+  rm -rf ext-1
+
+  mkdir main
+  cd main
+  cat > WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+  name="ext",
+  strip_prefix="ext-1.0",
+  urls=["file://${WRKDIR}/ext.tar"],
+)
+EOF
+  cat > BUILD <<'EOF'
+genrule(
+  name = "it",
+  srcs = ["@ext//:foo.txt"],
+  outs = ["it.txt"],
+  cmd = "cp $< $@",
+)
+EOF
+  bazel build //:it > "${TEST_log}" 2>&1 && fail "expected failure" || :
+  expect_log "ext-1.0.*not found"
+  expect_log "prefixes.*ext-1.1"
+}
+
+function test_suggest_nostripprefix() {
+  # Verify that a suggestion is made about dropping an unnecessary
+  # `strip_prefix` argument.
+  WRKDIR=$(mktemp -d "${TEST_TMPDIR}/testXXXXXX")
+  cd "${WRKDIR}"
+
+  mkdir ext
+  touch ext/foo.txt
+  (cd ext && tar cvf "${WRKDIR}/ext.tar" foo.txt)
+
+  mkdir main
+  cd main
+  cat > WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+  name="ext",
+  strip_prefix="ext-1.0",
+  urls=["file://${WRKDIR}/ext.tar"],
+)
+EOF
+  cat > BUILD <<'EOF'
+genrule(
+  name = "it",
+  srcs = ["@ext//:foo.txt"],
+  outs = ["it.txt"],
+  cmd = "cp $< $@",
+)
+EOF
+  bazel build //:it > "${TEST_log}" 2>&1 && fail "expected failure" || :
+  expect_log "ext-1.0.*not found"
+  expect_log "not.*any directory"
+  expect_log 'no need for `strip_prefix`'
+}
+
 
 run_suite "external tests"

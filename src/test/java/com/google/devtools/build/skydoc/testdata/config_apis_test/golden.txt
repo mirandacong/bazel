@@ -1,4 +1,7 @@
+<!-- Generated with Stardoc: http://skydoc.bazel.build -->
+
 <a name="#int_setting"></a>
+
 ## int_setting
 
 <pre>
@@ -29,6 +32,7 @@ int_setting(<a href="#int_setting-name">name</a>)
 
 
 <a name="#string_flag"></a>
+
 ## string_flag
 
 <pre>
@@ -58,31 +62,7 @@ string_flag(<a href="#string_flag-name">name</a>)
 </table>
 
 
-## _build_setting_impl
-
-<pre>
-_build_setting_impl(<a href="#_build_setting_impl-ctx">ctx</a>)
-</pre>
-
-
-
-### Parameters
-
-<table class="params-table">
-  <colgroup>
-    <col class="col-param" />
-    <col class="col-description" />
-  </colgroup>
-  <tbody>
-    <tr id="_build_setting_impl-ctx>
-      <td><code>ctx</code></td>
-      <td>
-        required.
-      </td>
-    </tr>
-  </tbody>
-</table>
-
+<a name="#exercise_the_api"></a>
 
 ## exercise_the_api
 
@@ -92,5 +72,33 @@ exercise_the_api()
 
 
 
+
+
+<a name="#transition_func"></a>
+
+## transition_func
+
+<pre>
+transition_func(<a href="#transition_func-settings">settings</a>)
+</pre>
+
+A no-op transition function.
+
+### Parameters
+
+<table class="params-table">
+  <colgroup>
+    <col class="col-param" />
+    <col class="col-description" />
+  </colgroup>
+  <tbody>
+    <tr id="transition_func-settings">
+      <td><code>settings</code></td>
+      <td>
+        required.
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 

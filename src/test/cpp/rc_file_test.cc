@@ -41,11 +41,11 @@ constexpr const char* kNullDevice = "/dev/null";
 class RcFileTest : public ::testing::Test {
  protected:
   RcFileTest()
-      : workspace_(
-            blaze_util::JoinPath(blaze::GetEnv("TEST_TMPDIR"), "workspace")),
-        cwd_(blaze_util::JoinPath(blaze::GetEnv("TEST_TMPDIR"), "cwd")),
+      : workspace_(blaze_util::JoinPath(blaze::GetPathEnv("TEST_TMPDIR"),
+                                        "workspace")),
+        cwd_(blaze_util::JoinPath(blaze::GetPathEnv("TEST_TMPDIR"), "cwd")),
         binary_dir_(
-            blaze_util::JoinPath(blaze::GetEnv("TEST_TMPDIR"), "bazeldir")),
+            blaze_util::JoinPath(blaze::GetPathEnv("TEST_TMPDIR"), "bazeldir")),
         binary_path_(blaze_util::JoinPath(binary_dir_, "bazel")),
         workspace_layout_(new WorkspaceLayout()) {}
 
@@ -173,8 +173,10 @@ TEST_F(GetRcFileTest, GetRcFilesLoadsAllDefaultBazelrcs) {
   ASSERT_EQ(2, parsed_rcs.size());
   const std::deque<std::string> expected_system_rc_que = {system_rc};
   const std::deque<std::string> expected_workspace_rc_que = {workspace_rc};
-  EXPECT_EQ(expected_system_rc_que, parsed_rcs[0].get()->sources());
-  EXPECT_EQ(expected_workspace_rc_que, parsed_rcs[1].get()->sources());
+  EXPECT_EQ(expected_system_rc_que,
+            parsed_rcs[0].get()->canonical_source_paths());
+  EXPECT_EQ(expected_workspace_rc_que,
+            parsed_rcs[1].get()->canonical_source_paths());
 }
 
 TEST_F(GetRcFileTest, GetRcFilesRespectsNoSystemRc) {
@@ -195,7 +197,8 @@ TEST_F(GetRcFileTest, GetRcFilesRespectsNoSystemRc) {
 
   ASSERT_EQ(1, parsed_rcs.size());
   const std::deque<std::string> expected_workspace_rc_que = {workspace_rc};
-  EXPECT_EQ(expected_workspace_rc_que, parsed_rcs[0].get()->sources());
+  EXPECT_EQ(expected_workspace_rc_que,
+            parsed_rcs[0].get()->canonical_source_paths());
 }
 
 TEST_F(GetRcFileTest, GetRcFilesRespectsNoWorkspaceRc) {
@@ -216,7 +219,8 @@ TEST_F(GetRcFileTest, GetRcFilesRespectsNoWorkspaceRc) {
 
   ASSERT_EQ(1, parsed_rcs.size());
   const std::deque<std::string> expected_system_rc_que = {system_rc};
-  EXPECT_EQ(expected_system_rc_que, parsed_rcs[0].get()->sources());
+  EXPECT_EQ(expected_system_rc_que,
+            parsed_rcs[0].get()->canonical_source_paths());
 }
 
 TEST_F(GetRcFileTest, GetRcFilesRespectsNoWorkspaceRcAndNoSystemCombined) {
@@ -317,8 +321,9 @@ TEST_F(GetRcFileTest, GetRcFilesReadsCommandLineRc) {
   // Because of the variety of path representations in windows, this
   // equality test does not attempt to check the entire path.
   ASSERT_EQ(1, parsed_rcs.size());
-  ASSERT_EQ(1, parsed_rcs[0].get()->sources().size());
-  EXPECT_THAT(parsed_rcs[0].get()->sources().front(), HasSubstr("mybazelrc"));
+  ASSERT_EQ(1, parsed_rcs[0].get()->canonical_source_paths().size());
+  EXPECT_THAT(parsed_rcs[0].get()->canonical_source_paths().front(),
+              HasSubstr("mybazelrc"));
 }
 
 TEST_F(GetRcFileTest, GetRcFilesAcceptsNullCommandLineRc) {
@@ -338,7 +343,7 @@ TEST_F(GetRcFileTest, GetRcFilesAcceptsNullCommandLineRc) {
   // but it does technically count as a file
   ASSERT_EQ(1, parsed_rcs.size());
   const std::deque<std::string> expected_rc_que = {kNullDevice};
-  EXPECT_EQ(expected_rc_que, parsed_rcs[0].get()->sources());
+  EXPECT_EQ(expected_rc_que, parsed_rcs[0].get()->canonical_source_paths());
 }
 
 class ParseOptionsTest : public RcFileTest {

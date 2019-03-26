@@ -16,13 +16,11 @@ package com.google.devtools.build.lib.analysis;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
-import com.google.devtools.build.lib.cmdline.Label;
 
 /** A loader that creates {@link PlatformConfiguration} instances based on command-line options. */
 public class PlatformConfigurationLoader implements ConfigurationFragmentFactory {
@@ -35,17 +33,10 @@ public class PlatformConfigurationLoader implements ConfigurationFragmentFactory
   public PlatformConfiguration create(BuildOptions buildOptions)
       throws InvalidConfigurationException {
     PlatformOptions platformOptions = buildOptions.get(PlatformOptions.class);
-    if (platformOptions.hostPlatform == null) {
-      throw new InvalidConfigurationException("Host platform not set");
-    }
-    Label targetPlatform = Iterables.getFirst(platformOptions.platforms, null);
-    if (targetPlatform == null) {
-      throw new InvalidConfigurationException("Target platform not set");
-    }
     return new PlatformConfiguration(
-        platformOptions.hostPlatform,
+        platformOptions.computeHostPlatform(),
         ImmutableList.copyOf(platformOptions.extraExecutionPlatforms),
-        targetPlatform,
+        platformOptions.computeTargetPlatform(),
         ImmutableList.copyOf(platformOptions.extraToolchains),
         ImmutableList.copyOf(platformOptions.enabledToolchainTypes));
   }

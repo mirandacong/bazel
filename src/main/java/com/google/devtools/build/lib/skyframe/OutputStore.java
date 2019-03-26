@@ -166,7 +166,7 @@ class OutputStore {
     injectedFiles.add(output);
 
     // While `artifactValue` carries the important information, consumers also require an entry in
-    // `outputArtifactData` so a `PLACEHOLDER` is added to `outputArtifactData`.
+    // `artifactData` so a `PLACEHOLDER` is added to `artifactData`.
     artifactData.put(output, ArtifactFileMetadata.PLACEHOLDER);
     additionalOutputData.put(output, artifactValue);
   }
@@ -183,5 +183,14 @@ class OutputStore {
     additionalOutputData.clear();
     treeArtifactContents.clear();
     injectedFiles.clear();
+  }
+
+  /** Clears data about a specific Artifact from this store. */
+  final void remove(Artifact artifact) {
+    artifactData.remove(artifact);
+    treeArtifactData.remove(artifact);
+    additionalOutputData.remove(artifact);
+    treeArtifactContents.remove(artifact);
+    injectedFiles.remove(artifact);
   }
 }

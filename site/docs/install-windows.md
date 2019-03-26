@@ -40,7 +40,10 @@ title: Installing Bazel on Windows
         Example: `c:\msys64\usr\bin\bash.exe`
     1.  **Add `JAVA_HOME`** (if you will build **Java** code). Its value must be
         the directory where you installed the Java JDK 8, for example
-        `C:\Program Files\Java\jdk1.8.0_152`
+        `C:\Program Files\Java\jdk1.8.0_152`. In order to use this with the
+        default local_jdk javabase, it must be installed on a volume which
+        Windows considers to be **local**, network mounted filesystems will not
+        work.
 
     **None of these paths should contain spaces or non-ASCII characters.**
 
@@ -48,6 +51,7 @@ title: Installing Bazel on Windows
 ### Other ways to get Bazel
 
 *   [Install Bazel using the Chocolatey package manager](#install-using-chocolatey)
+*   [Install Bazel using the Scoop package manager](#install-using-scoop)
 *   [Compile Bazel from source](install-compile-source.html)
 
 #### Install using Chocolatey
@@ -65,6 +69,20 @@ title: Installing Bazel on Windows
 See [Chocolatey installation and package maintenance
 guide](https://bazel.build/windows-chocolatey-maintenance.html) for more
 information about the Chocolatey package.
+
+#### Install using Scoop
+
+1.  Install the [Scoop](https://scoop.sh/) package manager using the following PowerShell command:
+
+        iex (new-object net.webclient).downloadstring('https://get.scoop.sh')
+
+2.  Install the Bazel package:
+
+        scoop install bazel
+
+See [Scoop installation and package maintenance
+guide](https://bazel.build/windows-scoop-maintenance.html) for more
+information about the Scoop package.
 
 ### Using Bazel
 

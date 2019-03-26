@@ -45,6 +45,8 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     OFF,
     /** JavaBuilder computes the reduced classpath before invoking javac. */
     JAVABUILDER,
+    /** Bazel computes the reduced classpath and tries it in a separate action invocation. */
+    BAZEL
   }
 
   /** Values for the --experimental_one_version_enforcement option */
@@ -149,11 +151,13 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   private final boolean useHeaderCompilation;
   private final boolean generateJavaDeps;
   private final boolean strictDepsJavaProtos;
+  private final boolean isDisallowStrictDepsForJpl;
   private final OneVersionEnforcementLevel enforceOneVersion;
   private final boolean enforceOneVersionOnJavaTests;
   private final ImportDepsCheckingLevel importDepsCheckingLevel;
   private final boolean allowRuntimeDepsOnNeverLink;
   private final JavaClasspathMode javaClasspath;
+  private final boolean inmemoryJdepsFiles;
   private final ImmutableList<String> defaultJvmFlags;
   private final ImmutableList<String> checkedConstraints;
   private final StrictDepsMode strictJavaDeps;
@@ -174,6 +178,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
   private final ImmutableList<Label> pluginList;
   private final boolean requireJavaToolchainHeaderCompilerDirect;
   private final boolean disallowResourceJars;
+  private final boolean windowsEscapeJvmFlags;
 
   // TODO(dmarting): remove once we have a proper solution for #2539
   private final boolean useLegacyBazelJavaTest;
@@ -187,6 +192,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.generateJavaDeps =
         javaOptions.javaDeps || javaOptions.javaClasspath != JavaClasspathMode.OFF;
     this.javaClasspath = javaOptions.javaClasspath;
+    this.inmemoryJdepsFiles = javaOptions.inmemoryJdepsFiles;
     this.defaultJvmFlags = ImmutableList.copyOf(javaOptions.jvmOpts);
     this.checkedConstraints = ImmutableList.copyOf(javaOptions.checkedConstraints);
     this.strictJavaDeps = javaOptions.strictJavaDeps;
@@ -194,11 +200,12 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.proguardBinary = javaOptions.proguard;
     this.extraProguardSpecs = ImmutableList.copyOf(javaOptions.extraProguardSpecs);
     this.bundleTranslations = javaOptions.bundleTranslations;
-    this.toolchainLabel = javaOptions.javaToolchain;
+    this.toolchainLabel = javaOptions.getJavaToolchain();
     this.runtimeLabel = javaOptions.javaBase;
     this.javaOptimizationMode = javaOptions.javaOptimizationMode;
     this.useLegacyBazelJavaTest = javaOptions.legacyBazelJavaTest;
     this.strictDepsJavaProtos = javaOptions.strictDepsJavaProtos;
+    this.isDisallowStrictDepsForJpl = javaOptions.isDisallowStrictDepsForJpl;
     this.enforceOneVersion = javaOptions.enforceOneVersion;
     this.enforceOneVersionOnJavaTests = javaOptions.enforceOneVersionOnJavaTests;
     this.importDepsCheckingLevel = javaOptions.importDepsCheckingLevel;
@@ -209,6 +216,7 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     this.isJlplStrictDepsEnforced = javaOptions.isJlplStrictDepsEnforced;
     this.disallowResourceJars = javaOptions.disallowResourceJars;
     this.addTestSupportToCompileTimeDeps = javaOptions.addTestSupportToCompileTimeDeps;
+    this.windowsEscapeJvmFlags = javaOptions.windowsEscapeJvmFlags;
 
     ImmutableList.Builder<Label> translationsBuilder = ImmutableList.builder();
     for (String s : javaOptions.translationTargets) {
@@ -279,6 +287,10 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
 
   public JavaClasspathMode getReduceJavaClasspath() {
     return javaClasspath;
+  }
+
+  public boolean inmemoryJdepsFiles() {
+    return inmemoryJdepsFiles;
   }
 
   public ImmutableList<String> getDefaultJvmFlags() {
@@ -424,6 +436,10 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
     return strictDepsJavaProtos;
   }
 
+  public boolean isDisallowStrictDepsForJpl() {
+    return isDisallowStrictDepsForJpl;
+  }
+
   public boolean jplPropagateCcLinkParamsStore() {
     return jplPropagateCcLinkParamsStore;
   }
@@ -446,5 +462,9 @@ public final class JavaConfiguration extends Fragment implements JavaConfigurati
 
   public boolean disallowResourceJars() {
     return disallowResourceJars;
+  }
+
+  public boolean windowsEscapeJvmFlags() {
+    return windowsEscapeJvmFlags;
   }
 }

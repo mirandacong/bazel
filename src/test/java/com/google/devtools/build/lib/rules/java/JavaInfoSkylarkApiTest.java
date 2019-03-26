@@ -594,6 +594,41 @@ public class JavaInfoSkylarkApiTest extends BuildViewTestCase {
   }
 
   @Test
+  public void buildHelperCreateJavaInfoPlugins() throws Exception {
+    ruleBuilder().build();
+    scratch.file("java/test/lib.jar");
+    scratch.file(
+        "java/test/BUILD",
+        "load(':custom_rule.bzl', 'java_custom_library')",
+        "java_custom_library(",
+        "  name = 'custom',",
+        "  export = ':export',",
+        ")");
+    scratch.file(
+        "foo/BUILD",
+        "load(':extension.bzl', 'my_rule')",
+        "java_library(name = 'plugin_dep',",
+        "    srcs = [ 'ProcessorDep.java'])",
+        "java_plugin(name = 'plugin',",
+        "    srcs = ['AnnotationProcessor.java'],",
+        "    processor_class = 'com.google.process.stuff',",
+        "    deps = [ ':plugin_dep' ])",
+        "java_library(",
+        "  name = 'export',",
+        "  exported_plugins = [ ':plugin'],",
+        ")",
+        "my_rule(name = 'my_skylark_rule',",
+        "        output_jar = 'my_skylark_rule_lib.jar',",
+        "        dep_exports = [':export']",
+        ")");
+    assertNoEvents();
+
+    assertThat(
+            fetchJavaInfo().getProvider(JavaPluginInfoProvider.class).plugins().processorClasses())
+        .containsExactly("com.google.process.stuff");
+  }
+
+  @Test
   public void buildHelperCreateJavaInfoWithOutputJarAndStampJar() throws Exception {
     if (legacyJavaInfoConstructor) {
       // Unsupported mode, don't test this
@@ -754,8 +789,12 @@ public class JavaInfoSkylarkApiTest extends BuildViewTestCase {
         "    exports = dp_exports,",
         "    jdeps = ctx.file.jdeps,",
         useIJar || sourceFiles ? "    actions = ctx.actions," : "",
-        useIJar || sourceFiles ? "    java_toolchain = ctx.attr._toolchain," : "",
-        sourceFiles ? "    host_javabase = ctx.attr._host_javabase," : "",
+        useIJar || sourceFiles
+            ? "    java_toolchain = ctx.attr._toolchain[java_common.JavaToolchainInfo],"
+            : "",
+        sourceFiles
+            ? "    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],"
+            : "",
         "  )",
         "  return [result(property = javaInfo)]"
       };
@@ -769,7 +808,7 @@ public class JavaInfoSkylarkApiTest extends BuildViewTestCase {
             "  compile_jar = java_common.run_ijar(",
             "    ctx.actions,",
             "    jar = ctx.outputs.output_jar,",
-            "    java_toolchain = ctx.attr._toolchain,",
+            "    java_toolchain = ctx.attr._toolchain[java_common.JavaToolchainInfo],",
             "  )");
       } else if (stampJar) {
         lines.add(
@@ -777,7 +816,7 @@ public class JavaInfoSkylarkApiTest extends BuildViewTestCase {
             "    ctx.actions,",
             "    jar = ctx.outputs.output_jar,",
             "    target_label = ctx.label,",
-            "    java_toolchain = ctx.attr._toolchain,",
+            "    java_toolchain = ctx.attr._toolchain[java_common.JavaToolchainInfo],",
             "  )");
       } else {
         lines.add("  compile_jar = ctx.outputs.output_jar");
@@ -789,8 +828,8 @@ public class JavaInfoSkylarkApiTest extends BuildViewTestCase {
             "    output_jar = ctx.outputs.output_jar,",
             "    sources = ctx.files.sources,",
             "    source_jars = ctx.files.source_jars,",
-            "    java_toolchain = ctx.attr._toolchain,",
-            "    host_javabase = ctx.attr._host_javabase,",
+            "    java_toolchain = ctx.attr._toolchain[java_common.JavaToolchainInfo],",
+            "    host_javabase = ctx.attr._host_javabase[java_common.JavaRuntimeInfo],",
             ")");
       } else {
         lines.add(

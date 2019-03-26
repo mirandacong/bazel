@@ -28,7 +28,6 @@ source "${CURRENT_DIR}/remote_helpers.sh" \
 
 function tear_down() {
   shutdown_server
-  cleanup_workspace
 }
 
 function setup_zoo() {
@@ -38,7 +37,7 @@ java_binary(
     name = "ball-pit",
     srcs = ["BallPit.java"],
     main_class = "BallPit",
-    deps = ["//external:mongoose"],
+    deps = ["@endangered//jar"],
 )
 EOF
 
@@ -65,7 +64,6 @@ maven_jar(
     sha1 = '$sha1',
     sha1_src = '$sha1_src',
 )
-bind(name = 'mongoose', actual = '@endangered//jar')
 EOF
 
   bazel run //zoo:ball-pit >& $TEST_log || fail "Expected run to succeed"
@@ -83,7 +81,6 @@ maven_jar(
     repository = 'http://127.0.0.1:$fileserver_port/',
     sha1 = '$sha1',
 )
-bind(name = 'mongoose', actual = '@endangered//jar')
 EOF
 
   bazel run //zoo:ball-pit >& $TEST_log || fail "Expected run to succeed"
@@ -101,7 +98,6 @@ maven_jar(
     artifact = "com.example.carnivore:carnivore:1.23",
     repository = 'http://127.0.0.1:$fileserver_port/',
 )
-bind(name = 'mongoose', actual = '@endangered//jar')
 EOF
 
   bazel run //zoo:ball-pit >& $TEST_log || fail "Expected run to succeed"
@@ -119,7 +115,6 @@ maven_jar(
     artifact = "com.example.carnivore:carnivore:1.23",
     repository = 'http://127.0.0.1:$fileserver_port/',
 )
-bind(name = 'mongoose', actual = '@endangered//jar')
 EOF
 
   bazel run //zoo:ball-pit >& $TEST_log || fail "Expected run to succeed"
@@ -140,7 +135,6 @@ maven_jar(
     artifact = "com.example.carnivore:carnivore:1.23",
     repository = 'http://127.0.0.1:$nc_port/',
 )
-bind(name = 'mongoose', actual = '@endangered//jar')
 EOF
 
   bazel clean --expunge
@@ -161,7 +155,6 @@ maven_jar(
     repository = 'http://127.0.0.1:$fileserver_port/',
     sha1 = '$wrong_sha1',
 )
-bind(name = 'mongoose', actual = '@endangered//jar')
 EOF
 
   bazel fetch //zoo:ball-pit >& $TEST_log && echo "Expected fetch to fail"

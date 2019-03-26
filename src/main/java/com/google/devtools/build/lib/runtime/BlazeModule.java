@@ -19,14 +19,15 @@ import com.google.devtools.build.lib.actions.ExecutorInitException;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
+import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
+import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.exec.ExecutorBuilder;
-import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
@@ -40,7 +41,6 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParsingResult;
 import com.google.devtools.common.options.OptionsProvider;
-import java.io.IOException;
 import java.util.UUID;
 import javax.annotation.Nullable;
 
@@ -248,6 +248,22 @@ public abstract class BlazeModule {
   }
 
   /**
+   * Called after Bazel analyzes the build's top-level targets. This is called once per build if
+   * --analyze is enabled. Modules can override this to perform extra checks on analysis results.
+   *
+   * @param env the command environment
+   * @param request the build request
+   * @param buildOptions the build's top-level options
+   * @param configuredTargets the build's requested top-level targets as {@link ConfiguredTarget}s
+   */
+  public void afterAnalysis(
+      CommandEnvironment env,
+      BuildRequest request,
+      BuildOptions buildOptions,
+      Iterable<ConfiguredTarget> configuredTargets)
+      throws InterruptedException, ViewCreationFailedException {}
+
+  /**
    * Called when Bazel initializes the action execution subsystem. This is called once per build if
    * action execution is enabled. Modules can override this method to affect how execution is
    * performed.
@@ -310,7 +326,7 @@ public abstract class BlazeModule {
    * runtime is allowed.
    */
   public Package.Builder.Helper getPackageBuilderHelper(
-      ConfiguredRuleClassProvider ruleClassProvider) {
+      ConfiguredRuleClassProvider ruleClassProvider, FileSystem fs) {
     return null;
   }
 
@@ -341,11 +357,13 @@ public abstract class BlazeModule {
    */
   public interface ModuleEnvironment {
     /**
-     * Gets a file from the depot based on its label and returns the {@link Path} where it can
-     * be found.
+     * Gets a file from the depot based on its label and returns the {@link Path} where it can be
+     * found.
+     *
+     * <p>Returns null when the package designated by the label does not exist.
      */
-    Path getFileFromWorkspace(Label label)
-        throws NoSuchThingException, InterruptedException, IOException;
+    @Nullable
+    Path getFileFromWorkspace(Label label);
 
     /**
      * Exits Blaze as early as possible by sending an interrupt to the command's main thread.

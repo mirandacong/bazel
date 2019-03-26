@@ -39,7 +39,6 @@ import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
-import com.google.devtools.common.options.InvocationPolicyEnforcer;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
@@ -74,22 +73,17 @@ public abstract class AnalysisMock extends LoadingMock {
         .setExtraSkyFunctions(getSkyFunctions(directories));
   }
 
-  @Override
-  public InvocationPolicyEnforcer getInvocationPolicyEnforcer() {
-    return new InvocationPolicyEnforcer(TestConstants.TEST_INVOCATION_POLICY);
-  }
-
-  @Override
-  public String getDefaultsPackageContent() {
-    return createRuleClassProvider()
-        .getDefaultsPackageContent(getInvocationPolicyEnforcer().getInvocationPolicy());
-  }
-
   /**
    * This is called from test setup to create the mock directory layout needed to create the
    * configuration.
    */
-  public abstract void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException;
+  public void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException {
+    List<String> workspaceContents = getWorkspaceContents(mockToolsConfig);
+    setupMockClient(mockToolsConfig, workspaceContents);
+  }
+
+  public abstract void setupMockClient(
+      MockToolsConfig mockToolsConfig, List<String> getWorkspaceContents) throws IOException;
 
   /**
    * Returns the contents of WORKSPACE.
@@ -159,8 +153,9 @@ public abstract class AnalysisMock extends LoadingMock {
     }
 
     @Override
-    public void setupMockClient(MockToolsConfig mockToolsConfig) throws IOException {
-      delegate.setupMockClient(mockToolsConfig);
+    public void setupMockClient(MockToolsConfig mockToolsConfig, List<String> workspaceContents)
+        throws IOException {
+      delegate.setupMockClient(mockToolsConfig, workspaceContents);
     }
 
     @Override
@@ -181,11 +176,6 @@ public abstract class AnalysisMock extends LoadingMock {
     @Override
     public ConfiguredRuleClassProvider createRuleClassProvider() {
       return delegate.createRuleClassProvider();
-    }
-
-    @Override
-    public InvocationPolicyEnforcer getInvocationPolicyEnforcer() {
-      return delegate.getInvocationPolicyEnforcer();
     }
 
     @Override
