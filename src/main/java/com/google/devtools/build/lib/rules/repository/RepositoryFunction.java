@@ -38,7 +38,9 @@ import com.google.devtools.build.lib.repository.ExternalPackageException;
 import com.google.devtools.build.lib.repository.ExternalPackageUtil;
 import com.google.devtools.build.lib.repository.ExternalRuleNotFoundException;
 import com.google.devtools.build.lib.skyframe.ActionEnvironmentFunction;
+import com.google.devtools.build.lib.skyframe.PackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageLookupValue;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -53,6 +55,7 @@ import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import javax.annotation.Nullable;
@@ -279,8 +282,12 @@ public abstract class RepositoryFunction {
       throw RepositoryFunction.restart();
     }
     if (!pkgLookupValue.packageExists()) {
+      String message = pkgLookupValue.getErrorMsg();
+      if (pkgLookupValue == PackageLookupValue.NO_BUILD_FILE_VALUE) {
+        message = PackageLookupFunction.explainNoBuildFileValue(label.getPackageIdentifier(), env);
+      }
       throw new EvalException(
-          Location.BUILTIN, "Unable to load package for " + label + ": not found.");
+          Location.BUILTIN, "Unable to load package for " + label + ": " + message);
     }
 
     // And now for the file
@@ -304,11 +311,23 @@ public abstract class RepositoryFunction {
     if (environ == null) {
       return null;
     }
+
+    Map<String, String> repoEnvOverride = PrecomputedValue.REPO_ENV.get(env);
+    if (repoEnvOverride == null) {
+      return null;
+    }
+
+    Map<String, String> repoEnv = new LinkedHashMap<String, String>(environ);
+    for (Map.Entry<String, String> value : repoEnvOverride.entrySet()) {
+      repoEnv.put(value.getKey(), value.getValue());
+    }
+
     // Add the dependencies to the marker file
-    for (Map.Entry<String, String> value : environ.entrySet()) {
+    for (Map.Entry<String, String> value : repoEnv.entrySet()) {
       markerData.put("ENV:" + value.getKey(), value.getValue());
     }
-    return environ;
+
+    return repoEnv;
   }
 
   /**

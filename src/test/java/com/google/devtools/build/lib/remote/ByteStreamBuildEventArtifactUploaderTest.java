@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.remote;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.junit.Assert.fail;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static org.mockito.Mockito.mock;
 
 import build.bazel.remote.execution.v2.Digest;
@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -104,6 +105,8 @@ public class ByteStreamBuildEventArtifactUploaderTest {
     // on different threads than the tearDown.
     withEmptyMetadata.detach(prevContext);
 
+    channel.shutdownNow();
+    channel.awaitTermination(5, TimeUnit.SECONDS);
     server.shutdownNow();
     server.awaitTermination();
   }
@@ -234,12 +237,9 @@ public class ByteStreamBuildEventArtifactUploaderTest {
         new ByteStreamBuildEventArtifactUploader(
             uploader, "localhost", withEmptyMetadata, "instance", /* maxUploadThreads= */ 100);
 
-    try {
-      artifactUploader.upload(filesToUpload).get();
-      fail("exception expected.");
-    } catch (ExecutionException e) {
-      assertThat(Status.fromThrowable(e).getCode()).isEqualTo(Status.CANCELLED.getCode());
-    }
+    ExecutionException e =
+        assertThrows(ExecutionException.class, () -> artifactUploader.upload(filesToUpload).get());
+    assertThat(Status.fromThrowable(e).getCode()).isEqualTo(Status.CANCELLED.getCode());
 
     artifactUploader.shutdown();
 

@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.skyframe;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.analysis.PlatformOptions.LEGACY_DEFAULT_TARGET_PLATFORM;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.base.Optional;
@@ -26,6 +25,7 @@ import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -54,8 +54,7 @@ public class PlatformMappingFunctionTest extends BuildViewTestCase {
       ImmutableSet.of(PlatformConfiguration.class);
 
   private static final ImmutableList<Class<? extends FragmentOptions>>
-      BUILD_CONFIG_PLATFORM_OPTIONS =
-          ImmutableList.of(BuildConfiguration.Options.class, PlatformOptions.class);
+      BUILD_CONFIG_PLATFORM_OPTIONS = ImmutableList.of(CoreOptions.class, PlatformOptions.class);
 
   private static final Label PLATFORM1 = Label.parseAbsoluteUnchecked("//platforms:one");
 
@@ -64,6 +63,8 @@ public class PlatformMappingFunctionTest extends BuildViewTestCase {
   private static final BuildOptions.OptionsDiffForReconstruction EMPTY_DIFF =
       BuildOptions.diffForReconstruction(
           DEFAULT_BUILD_CONFIG_PLATFORM_OPTIONS, DEFAULT_BUILD_CONFIG_PLATFORM_OPTIONS);
+  private static final Label DEFAULT_TARGET_PLATFORM =
+      Label.parseAbsoluteUnchecked("@bazel_tools//platforms:target_platform");
 
   @Test
   public void testMappingFileDoesNotExist() throws Exception {
@@ -82,13 +83,13 @@ public class PlatformMappingFunctionTest extends BuildViewTestCase {
         executeFunction(PlatformMappingValue.Key.create(null));
 
     BuildConfigurationValue.Key key =
-        BuildConfigurationValue.key(PLATFORM_FRAGMENT_CLASS, EMPTY_DIFF);
+        BuildConfigurationValue.keyWithoutPlatformMapping(PLATFORM_FRAGMENT_CLASS, EMPTY_DIFF);
 
     BuildConfigurationValue.Key mapped =
         platformMappingValue.map(key, DEFAULT_BUILD_CONFIG_PLATFORM_OPTIONS);
 
     assertThat(toMappedOptions(mapped).get(PlatformOptions.class).platforms)
-        .containsExactly(LEGACY_DEFAULT_TARGET_PLATFORM);
+        .containsExactly(DEFAULT_TARGET_PLATFORM);
   }
 
   @Test
@@ -120,7 +121,7 @@ public class PlatformMappingFunctionTest extends BuildViewTestCase {
         platformMappingValue.map(
             keyForOptions(modifiedOptions), DEFAULT_BUILD_CONFIG_PLATFORM_OPTIONS);
 
-    assertThat(toMappedOptions(mapped).get(BuildConfiguration.Options.class).cpu).isEqualTo("one");
+    assertThat(toMappedOptions(mapped).get(CoreOptions.class).cpu).isEqualTo("one");
   }
 
   private PlatformMappingValue executeFunction(PlatformMappingValue.Key key) throws Exception {
@@ -154,6 +155,6 @@ public class PlatformMappingFunctionTest extends BuildViewTestCase {
     BuildOptions.OptionsDiffForReconstruction diff =
         BuildOptions.diffForReconstruction(DEFAULT_BUILD_CONFIG_PLATFORM_OPTIONS, modifiedOptions);
 
-    return BuildConfigurationValue.key(PLATFORM_FRAGMENT_CLASS, diff);
+    return BuildConfigurationValue.keyWithoutPlatformMapping(PLATFORM_FRAGMENT_CLASS, diff);
   }
 }

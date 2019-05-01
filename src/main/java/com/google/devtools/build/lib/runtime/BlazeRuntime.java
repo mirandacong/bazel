@@ -100,7 +100,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -162,6 +161,7 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
   private final BuildEventArtifactUploaderFactoryMap buildEventArtifactUploaderFactoryMap;
   private final ActionKeyContext actionKeyContext;
   private final ImmutableMap<String, AuthHeadersProvider> authHeadersProviderMap;
+  private final RetainedHeapLimiter retainedHeapLimiter = new RetainedHeapLimiter();
 
   // Workspace state (currently exactly one workspace per server)
   private BlazeWorkspace workspace;
@@ -283,7 +283,7 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     Profiler.Format format = Profiler.Format.BINARY_BAZEL_FORMAT;
     Path profilePath = null;
     try {
-      if (options.enableTracer) {
+      if (options.enableTracer || (options.removeBinaryProfile && options.profilePath != null)) {
         format =
             options.enableTracerCompression
                 ? Format.JSON_TRACE_FILE_COMPRESSED_FORMAT
@@ -336,14 +336,15 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
             profiledTasks,
             out,
             format,
-            String.format(
-                "%s profile for %s at %s, build ID: %s",
-                getProductName(), workspace.getOutputBase(), new Date(), buildID),
+            getProductName(),
+            workspace.getOutputBase().toString(),
+            buildID,
             recordFullProfilerData,
             clock,
             execStartTimeNanos,
             options.enableCpuUsageProfiling,
-            options.enableJsonProfileDiet);
+            options.enableJsonProfileDiet,
+            options.enableJsonMetadata);
         // Instead of logEvent() we're calling the low level function to pass the timings we took in
         // the launcher. We're setting the INIT phase marker so that it follows immediately the
         // LAUNCH phase.
@@ -488,6 +489,10 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
 
   public QueryRuntimeHelper.Factory getQueryRuntimeHelperFactory() {
     return queryRuntimeHelperFactory;
+  }
+
+  RetainedHeapLimiter getRetainedHeapLimiter() {
+    return retainedHeapLimiter;
   }
 
   /**
@@ -671,8 +676,12 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
 
   /** Invokes {@link BlazeModule#blazeShutdown()} on all registered modules. */
   public void shutdown() {
-    for (BlazeModule module : blazeModules) {
-      module.blazeShutdown();
+    try {
+      for (BlazeModule module : blazeModules) {
+        module.blazeShutdown();
+      }
+    } finally {
+      flushServerLog();
     }
   }
 
@@ -684,8 +693,12 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
 
   /** Invokes {@link BlazeModule#blazeShutdownOnCrash()} on all registered modules. */
   public void shutdownOnCrash() {
-    for (BlazeModule module : blazeModules) {
-      module.blazeShutdownOnCrash();
+    try {
+      for (BlazeModule module : blazeModules) {
+        module.blazeShutdownOnCrash();
+      }
+    } finally {
+      flushServerLog();
     }
   }
 

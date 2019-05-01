@@ -297,6 +297,47 @@ public class CppActionConfigs {
                         "    }",
                         "  }")));
       }
+
+      if (!existingFeatureNames.contains(CppRuleClasses.CS_FDO_INSTRUMENT)) {
+        featureBuilder.add(
+            getFeature(
+                Joiner.on("\n")
+                    .join(
+                        "  name: 'cs_fdo_instrument'",
+                        "  provides: 'csprofile'",
+                        "  flag_set {",
+                        "    action: 'c-compile'",
+                        "    action: 'c++-compile'",
+                        "    action: 'lto-backend'",
+                        "    action: 'c++-link-dynamic-library'",
+                        "    action: 'c++-link-nodeps-dynamic-library'",
+                        "    action: 'c++-link-executable'",
+                        "    flag_group {",
+                        "      expand_if_all_available: 'cs_fdo_instrument_path'",
+                        "      flag: '-fcs-profile-generate=%{cs_fdo_instrument_path}'",
+                        "    }",
+                        "  }")));
+      }
+
+      if (!existingFeatureNames.contains(CppRuleClasses.CS_FDO_OPTIMIZE)) {
+        featureBuilder.add(
+            getFeature(
+                Joiner.on("\n")
+                    .join(
+                        "  name: 'cs_fdo_optimize'",
+                        "  provides: 'csprofile'",
+                        "  flag_set {",
+                        "    action: 'lto-backend'",
+                        "    flag_group {",
+                        "      expand_if_all_available: 'fdo_profile_path'",
+                        "      flag: '-fprofile-use=%{fdo_profile_path}'",
+                        "      flag: '-Xclang-only=-Wno-profile-instr-unprofiled'",
+                        "      flag: '-Xclang-only=-Wno-profile-instr-out-of-date'",
+                        "      flag: '-fprofile-correction'",
+                        "    }",
+                        "  }")));
+      }
+
       if (!existingFeatureNames.contains(CppRuleClasses.FDO_PREFETCH_HINTS)) {
         featureBuilder.add(
             getFeature(
@@ -938,6 +979,20 @@ public class CppActionConfigs {
           getActionConfig(
               Joiner.on("\n")
                   .join(
+                      "  config_name: 'lto-backend'",
+                      "  action_name: 'lto-backend'",
+                      "  tool {",
+                      "    tool_path: '" + gccToolPath + "'",
+                      "  }",
+                      "  implies: 'legacy_compile_flags'",
+                      "  implies: 'user_compile_flags'",
+                      "  implies: 'sysroot'",
+                      "  implies: 'unfiltered_compile_flags'",
+                      "  implies: 'compiler_input_flags'",
+                      "  implies: 'compiler_output_flags'")),
+          getActionConfig(
+              Joiner.on("\n")
+                  .join(
                       "  config_name: 'c-compile'",
                       "  action_name: 'c-compile'",
                       "  tool {",
@@ -1029,6 +1084,27 @@ public class CppActionConfigs {
           getActionConfig(
               Joiner.on("\n")
                   .join(
+                      "  config_name: 'lto-index-for-executable'",
+                      "  action_name: 'lto-index-for-executable'",
+                      "  tool {",
+                      "    tool_path: '" + gccToolPath + "'",
+                      "  }",
+                      "  implies: 'symbol_counts'",
+                      "  implies: 'strip_debug_symbols'",
+                      "  implies: 'linkstamps'",
+                      "  implies: 'output_execpath_flags'",
+                      "  implies: 'runtime_library_search_directories'",
+                      "  implies: 'library_search_directories'",
+                      "  implies: 'libraries_to_link'",
+                      "  implies: 'force_pic_flags'",
+                      "  implies: 'user_link_flags'",
+                      "  implies: 'legacy_link_flags'",
+                      "  implies: 'linker_param_file'",
+                      "  implies: 'fission_support'",
+                      "  implies: 'sysroot'")),
+          getActionConfig(
+              Joiner.on("\n")
+                  .join(
                       "  config_name: 'c++-link-nodeps-dynamic-library'",
                       "  action_name: 'c++-link-nodeps-dynamic-library'",
                       "  tool {",
@@ -1052,8 +1128,54 @@ public class CppActionConfigs {
           getActionConfig(
               Joiner.on("\n")
                   .join(
+                      "  config_name: 'lto-index-for-nodeps-dynamic-library'",
+                      "  action_name: 'lto-index-for-nodeps-dynamic-library'",
+                      "  tool {",
+                      "    tool_path: '" + gccToolPath + "'",
+                      "  }",
+                      "  implies: 'build_interface_libraries'",
+                      "  implies: 'dynamic_library_linker_tool'",
+                      "  implies: 'symbol_counts'",
+                      "  implies: 'strip_debug_symbols'",
+                      "  implies: 'shared_flag'",
+                      "  implies: 'linkstamps'",
+                      "  implies: 'output_execpath_flags'",
+                      "  implies: 'runtime_library_search_directories'",
+                      "  implies: 'library_search_directories'",
+                      "  implies: 'libraries_to_link'",
+                      "  implies: 'user_link_flags'",
+                      "  implies: 'legacy_link_flags'",
+                      "  implies: 'linker_param_file'",
+                      "  implies: 'fission_support'",
+                      "  implies: 'sysroot'")),
+          getActionConfig(
+              Joiner.on("\n")
+                  .join(
                       "  config_name: 'c++-link-dynamic-library'",
                       "  action_name: 'c++-link-dynamic-library'",
+                      "  tool {",
+                      "    tool_path: '" + gccToolPath + "'",
+                      "  }",
+                      "  implies: 'build_interface_libraries'",
+                      "  implies: 'dynamic_library_linker_tool'",
+                      "  implies: 'symbol_counts'",
+                      "  implies: 'strip_debug_symbols'",
+                      "  implies: 'shared_flag'",
+                      "  implies: 'linkstamps'",
+                      "  implies: 'output_execpath_flags'",
+                      "  implies: 'runtime_library_search_directories'",
+                      "  implies: 'library_search_directories'",
+                      "  implies: 'libraries_to_link'",
+                      "  implies: 'user_link_flags'",
+                      "  implies: 'legacy_link_flags'",
+                      "  implies: 'linker_param_file'",
+                      "  implies: 'fission_support'",
+                      "  implies: 'sysroot'")),
+          getActionConfig(
+              Joiner.on("\n")
+                  .join(
+                      "  config_name: 'lto-index-for-dynamic-library'",
+                      "  action_name: 'lto-index-for-dynamic-library'",
                       "  tool {",
                       "    tool_path: '" + gccToolPath + "'",
                       "  }",

@@ -258,45 +258,45 @@ public class AppleCommandLineOptions extends FragmentOptions {
   public ConfigurationDistinguisher configurationDistinguisher;
 
   @Option(
-    name = "ios_multi_cpus",
-    converter = CommaSeparatedOptionListConverter.class,
-    defaultValue = "",
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
-    help =
-        "Comma-separated list of architectures to build an ios_application with. The result "
-            + "is a universal binary containing all specified architectures."
-  )
+      name = "ios_multi_cpus",
+      allowMultiple = true,
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = "unused",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help =
+          "Comma-separated list of architectures to build an ios_application with. The result "
+              + "is a universal binary containing all specified architectures.")
   public List<String> iosMultiCpus;
 
   @Option(
-    name = "watchos_cpus",
-    converter = CommaSeparatedOptionListConverter.class,
-    defaultValue = DEFAULT_WATCHOS_CPU,
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
-    help = "Comma-separated list of architectures for which to build Apple watchOS binaries."
-  )
+      name = "watchos_cpus",
+      allowMultiple = true,
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = "unused",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help = "Comma-separated list of architectures for which to build Apple watchOS binaries.")
   public List<String> watchosCpus;
 
   @Option(
-    name = "tvos_cpus",
-    converter = CommaSeparatedOptionListConverter.class,
-    defaultValue = DEFAULT_TVOS_CPU,
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
-    help = "Comma-separated list of architectures for which to build Apple tvOS binaries."
-  )
+      name = "tvos_cpus",
+      allowMultiple = true,
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = "unused",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help = "Comma-separated list of architectures for which to build Apple tvOS binaries.")
   public List<String> tvosCpus;
 
   @Option(
-    name = "macos_cpus",
-    converter = CommaSeparatedOptionListConverter.class,
-    defaultValue = DEFAULT_MACOS_CPU,
-    documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
-    help = "Comma-separated list of architectures for which to build Apple macOS binaries."
-  )
+      name = "macos_cpus",
+      allowMultiple = true,
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = "unused",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help = "Comma-separated list of architectures for which to build Apple macOS binaries.")
   public List<String> macosCpus;
 
   @Option(
@@ -436,12 +436,23 @@ public class AppleCommandLineOptions extends FragmentOptions {
     host.tvOsSdkVersion = tvOsSdkVersion;
     host.macOsSdkVersion = macOsSdkVersion;
     host.appleBitcodeMode = appleBitcodeMode;
+    // TODO(http://b/131411178): Replace with the execution platform.
     // The host apple platform type will always be MACOS, as no other apple platform type can
     // currently execute build actions. If that were the case, a host_apple_platform_type flag might
     // be needed.
     host.applePlatformType = PlatformType.MACOS;
 
     return host;
+  }
+
+  @Override
+  public FragmentOptions getExec() {
+    AppleCommandLineOptions exec = (AppleCommandLineOptions) super.getExec();
+    // TODO(http://b/131411178): Replace with the execution platform.
+    // The exec apple platform type will always be MACOS, as no other apple platform type can
+    // currently execute build actions.
+    exec.applePlatformType = PlatformType.MACOS;
+    return exec;
   }
 
   void serialize(SerializationContext context, CodedOutputStream out)

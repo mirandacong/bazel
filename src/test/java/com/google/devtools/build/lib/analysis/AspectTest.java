@@ -493,7 +493,7 @@ public class AspectTest extends AnalysisTestCase {
                                     .aspect(AspectThatRegistersAction.INSTANCE))
                             .add(
                                 attr(":action_listener", LABEL_LIST)
-                                    .cfg(HostTransition.INSTANCE)
+                                    .cfg(HostTransition.createFactory())
                                     .value(ACTION_LISTENER)));
 
     public static class AspectThatRegistersAction extends NativeAspectClass
@@ -599,11 +599,11 @@ public class AspectTest extends AnalysisTestCase {
         "x/extension.bzl",
         "def _aspect_impl(target, ctx):",
         "  ctx.actions.do_nothing(mnemonic='Mnemonic')",
-        "  return struct()",
+        "  return []",
         "aspect1 = aspect(_aspect_impl, attr_aspects=['deps'])",
         "aspect2 = aspect(_aspect_impl, attr_aspects=['extra_deps'])",
         "def _rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "injector1 = rule(_rule_impl, attrs = { 'deps' : attr.label_list(aspects = [aspect1]) })",
         "null_rule = rule(_rule_impl, attrs = { 'deps' : attr.label_list() })",
         "injector2 = rule(",
@@ -664,17 +664,16 @@ public class AspectTest extends AnalysisTestCase {
         "x/extension.bzl",
         "def _aspect_impl(target, ctx):",
         "  ctx.actions.do_nothing(mnemonic='Mnemonic')",
-        "  return struct()",
+        "  return []",
         "aspect1 = aspect(_aspect_impl, attr_aspects=['deps'], attrs =",
         "    {'param': attr.string(values = ['a', 'b'])})",
         "aspect2 = aspect(_aspect_impl, attr_aspects=['deps'])",
         "def _rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "injector1 = rule(_rule_impl, attrs =",
         "    { 'deps' : attr.label_list(aspects = [aspect1]), 'param' : attr.string() })",
         "injector2 = rule(_rule_impl, attrs = { 'deps' : attr.label_list(aspects = [aspect2]) })",
-        "null_rule = rule(_rule_impl, attrs = { 'deps' : attr.label_list() })"
-    );
+        "null_rule = rule(_rule_impl, attrs = { 'deps' : attr.label_list() })");
 
     scratch.file(
         "pkg1/BUILD",

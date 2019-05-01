@@ -457,6 +457,20 @@ _thin_lto_feature = feature(
             ],
         ),
         flag_set(
+            actions = [
+                ACTION_NAMES.lto_index_for_executable,
+                ACTION_NAMES.lto_index_for_dynamic_library,
+                ACTION_NAMES.lto_index_for_nodeps_dynamic_library,
+            ],
+            flag_groups = [
+                flag_group(
+                    flags = ["--i_come_from_standalone_lto_index=%{user_link_flags}"],
+                    iterate_over = "user_link_flags",
+                    expand_if_available = "user_link_flags",
+                ),
+            ],
+        ),
+        flag_set(
             actions = [ACTION_NAMES.lto_indexing],
             flag_groups = [
                 flag_group(
@@ -1039,6 +1053,10 @@ _portable_overrides_configuration = [
     ),
 ]
 
+_disable_whole_archive_for_static_lib_configuration = [
+    feature(name = "disable_whole_archive_for_static_lib"),
+]
+
 _same_symbol_provided_configuration = [
     feature(name = "a1", provides = ["a"]),
     feature(name = "a2", provides = ["a"]),
@@ -1156,6 +1174,7 @@ _feature_name_to_feature = {
     "simple_module_maps": _simple_module_maps_feature,
     "simple_header_modules": _simple_header_modules_feature,
     "portable_overrides_configuration": _portable_overrides_configuration,
+    "disable_whole_archive_for_static_lib_configuration": _disable_whole_archive_for_static_lib_configuration,
     "same_symbol_provided_configuration": _same_symbol_provided_configuration,
     "simple_thin_lto": _simple_thin_lto_feature,
     "extra_implies_module_maps": _extra_implies_module_maps_feature,

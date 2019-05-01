@@ -15,15 +15,14 @@ package com.google.devtools.build.lib.query2;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.Dependency;
 import com.google.devtools.build.lib.analysis.DependencyResolver;
 import com.google.devtools.build.lib.analysis.DependencyResolver.DependencyKind;
 import com.google.devtools.build.lib.analysis.DependencyResolver.InconsistentAspectOrderException;
-import com.google.devtools.build.lib.analysis.PlatformSemantics;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
+import com.google.devtools.build.lib.analysis.ToolchainContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptions.OptionsDiff;
@@ -31,15 +30,14 @@ import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NullTransition;
+import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.packages.BuildType;
-import com.google.devtools.build.lib.packages.ConfiguredAttributeMapper;
-import com.google.devtools.build.lib.packages.RuleTransitionFactory;
+import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.TargetAccessor;
@@ -65,7 +63,7 @@ public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback
   protected final BuildConfiguration hostConfiguration;
 
   private final HashMap<Label, Target> partialResultMap;
-  @Nullable private final RuleTransitionFactory trimmingTransitionFactory;
+  @Nullable private final TransitionFactory<Rule> trimmingTransitionFactory;
 
   @Override
   public String getName() {
@@ -83,7 +81,7 @@ public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback
       SkyframeExecutor skyframeExecutor,
       TargetAccessor<ConfiguredTarget> accessor,
       BuildConfiguration hostConfiguration,
-      @Nullable RuleTransitionFactory trimmingTransitionFactory) {
+      @Nullable TransitionFactory<Rule> trimmingTransitionFactory) {
     super(eventHandler, options, out, skyframeExecutor, accessor);
     this.hostConfiguration = hostConfiguration;
     this.trimmingTransitionFactory = trimmingTransitionFactory;
@@ -119,10 +117,11 @@ public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback
       OrderedSetMultimap<DependencyKind, Dependency> deps;
       ImmutableMap<Label, ConfigMatchingProvider> configConditions =
           ((RuleConfiguredTarget) configuredTarget).getConfigConditions();
+
+      // Get a ToolchainContext to use for dependency resolution.
+      ToolchainContext toolchainContext = accessor.getToolchainContext(target, config);
       try {
-        // Note: Being able to pull the $resolved_toolchain_internal attr unconditionally from the
-        // mapper relies on the fact that {@link PlatformSemantics.RESOLVED_TOOLCHAINS_ATTR} exists
-        // in every rule. Also, we don't actually use fromOptions in our implementation of
+        // We don't actually use fromOptions in our implementation of
         // DependencyResolver but passing to avoid passing a null and since we have the information
         // anyway.
         deps =
@@ -132,9 +131,7 @@ public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback
                     hostConfiguration,
                     /*aspect=*/ null,
                     configConditions,
-                    ImmutableSet.copyOf(
-                        ConfiguredAttributeMapper.of(target.getAssociatedRule(), configConditions)
-                            .get(PlatformSemantics.RESOLVED_TOOLCHAINS_ATTR, BuildType.LABEL_LIST)),
+                    toolchainContext,
                     trimmingTransitionFactory);
       } catch (EvalException | InconsistentAspectOrderException e) {
         throw new InterruptedException(e.getMessage());
@@ -151,10 +148,12 @@ public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback
         BuildOptions fromOptions = config.getOptions();
         List<BuildOptions> toOptions = dep.getTransition().apply(fromOptions);
         String hostConfigurationChecksum = hostConfiguration.checksum();
-        String dependencyName =
-            attributeAndDep.getKey() == DependencyResolver.TOOLCHAIN_DEPENDENCY
-                ? PlatformSemantics.RESOLVED_TOOLCHAINS_ATTR
-                : attributeAndDep.getKey().getAttribute().getName();
+        String dependencyName;
+        if (attributeAndDep.getKey() == DependencyResolver.TOOLCHAIN_DEPENDENCY) {
+          dependencyName = "[toolchain dependency]";
+        } else {
+          dependencyName = attributeAndDep.getKey().getAttribute().getName();
+        }
         addResult(
             "  "
                 .concat(dependencyName)
@@ -187,15 +186,11 @@ public class TransitionsOutputFormatterCallback extends CqueryThreadsafeCallback
   private String getRuleClassTransition(ConfiguredTarget ct, Target target) {
     String output = "";
     if (ct instanceof RuleConfiguredTarget) {
-      RuleTransitionFactory factory =
+      TransitionFactory<Rule> factory =
           target.getAssociatedRule().getRuleClassObject().getTransitionFactory();
       if (factory != null) {
         output =
-            factory
-                .buildTransitionFor(target.getAssociatedRule())
-                .getClass()
-                .getSimpleName()
-                .concat(" -> ");
+            factory.create(target.getAssociatedRule()).getClass().getSimpleName().concat(" -> ");
       }
     }
     return output;

@@ -28,10 +28,10 @@ import com.google.devtools.build.lib.syntax.UserDefinedFunction;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.skydoc.SkydocMain.StarlarkEvaluationException;
-import com.google.devtools.build.skydoc.rendering.AttributeInfo;
 import com.google.devtools.build.skydoc.rendering.RuleInfo;
 import com.google.devtools.build.skydoc.rendering.UserDefinedFunctionInfo;
 import com.google.devtools.build.skydoc.rendering.UserDefinedFunctionInfo.DocstringParseException;
+import com.google.devtools.build.skydoc.rendering.proto.StardocOutputProtos.AttributeType;
 import java.io.IOException;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -101,7 +101,7 @@ public final class SkydocTest extends SkylarkTestCase {
     scratch.file(
         "/test/test.bzl",
         "def rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "",
         "my_rule = rule(",
         "    doc = 'This is my rule. It does stuff.',",
@@ -130,12 +130,14 @@ public final class SkydocTest extends SkylarkTestCase {
     assertThat(ruleInfo.getValue().getDocString()).isEqualTo("This is my rule. It does stuff.");
     assertThat(getAttrNames(ruleInfo.getValue())).containsExactly(
         "name", "a", "b", "c", "d").inOrder();
-    assertThat(getAttrTypes(ruleInfo.getValue())).containsExactly(
-        AttributeInfo.Type.NAME,
-        AttributeInfo.Type.LABEL,
-        AttributeInfo.Type.STRING_DICT,
-        AttributeInfo.Type.OUTPUT,
-        AttributeInfo.Type.BOOLEAN).inOrder();
+    assertThat(getAttrTypes(ruleInfo.getValue()))
+        .containsExactly(
+            AttributeType.NAME,
+            AttributeType.LABEL,
+            AttributeType.STRING_DICT,
+            AttributeType.OUTPUT,
+            AttributeType.BOOLEAN)
+        .inOrder();
   }
 
   private static Iterable<String> getAttrNames(RuleInfo ruleInfo) {
@@ -143,7 +145,7 @@ public final class SkydocTest extends SkylarkTestCase {
         .collect(Collectors.toList());
   }
 
-  private static Iterable<AttributeInfo.Type> getAttrTypes(RuleInfo ruleInfo) {
+  private static Iterable<AttributeType> getAttrTypes(RuleInfo ruleInfo) {
     return ruleInfo.getAttributes().stream().map(attr -> attr.getType())
         .collect(Collectors.toList());
   }
@@ -153,7 +155,7 @@ public final class SkydocTest extends SkylarkTestCase {
     scratch.file(
         "/test/test.bzl",
         "def rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "",
         "rule_one = rule(",
         "    doc = 'Rule one',",
@@ -189,10 +191,7 @@ public final class SkydocTest extends SkylarkTestCase {
 
   @Test
   public void testRulesAcrossMultipleFiles() throws Exception {
-    scratch.file(
-        "/lib/rule_impl.bzl",
-        "def rule_impl(ctx):",
-        "  return struct()");
+    scratch.file("/lib/rule_impl.bzl", "def rule_impl(ctx):", "  return []");
 
     scratch.file("/other_root/deps/foo/other_root.bzl", "doc_string = 'Dep rule'");
 
@@ -238,10 +237,7 @@ public final class SkydocTest extends SkylarkTestCase {
 
   @Test
   public void testRulesAcrossRepository() throws Exception {
-    scratch.file(
-        "/external/dep_repo/lib/rule_impl.bzl",
-        "def rule_impl(ctx):",
-        "  return struct()");
+    scratch.file("/external/dep_repo/lib/rule_impl.bzl", "def rule_impl(ctx):", "  return []");
 
     scratch.file(
         "/deps/foo/docstring.bzl",
@@ -321,7 +317,7 @@ public final class SkydocTest extends SkylarkTestCase {
         "/dep/dep.bzl",
         "load('//test:main.bzl', 'some_var')",
         "def rule_impl(ctx):",
-        "  return struct()");
+        "  return []");
 
     scratch.file(
         "/test/main.bzl",

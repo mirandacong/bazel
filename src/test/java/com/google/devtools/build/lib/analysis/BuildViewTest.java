@@ -23,7 +23,6 @@ import static org.junit.Assert.fail;
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -32,7 +31,7 @@ import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.FailAction;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NullTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.InputFileConfiguredTarget;
@@ -55,10 +54,7 @@ import com.google.devtools.build.lib.testutil.TestSpec;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.NotifyingHelper.EventType;
 import com.google.devtools.build.skyframe.NotifyingHelper.Listener;
-import com.google.devtools.build.skyframe.NotifyingHelper.Order;
-import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsParsingException;
 import java.util.ArrayList;
@@ -276,43 +272,6 @@ public class BuildViewTest extends BuildViewTestBase {
   }
 
   @Test
-  public void testConvolutedLoadRootCauseAnalysis() throws Exception {
-    // You need license declarations in third_party. We use this constraint to
-    // create targets that are loadable, but are in error.
-    scratch.file("third_party/first/BUILD",
-        "sh_library(name='first', deps=['//third_party/second'], licenses=['notice'])");
-    scratch.file("third_party/second/BUILD",
-        "sh_library(name='second', deps=['//third_party/third'], licenses=['notice'])");
-    scratch.file("third_party/third/BUILD",
-        "sh_library(name='third', deps=['//third_party/fourth'], licenses=['notice'])");
-    scratch.file("third_party/fourth/BUILD",
-        "sh_library(name='fourth', deps=['//third_party/fifth'])");
-    scratch.file("third_party/fifth/BUILD",
-        "sh_library(name='fifth', licenses=['notice'])");
-    reporter.removeHandler(failFastHandler);
-    EventBus eventBus = new EventBus();
-    LoadingFailureRecorder recorder = new LoadingFailureRecorder();
-    eventBus.register(recorder);
-    // Note: no need to run analysis for a loading failure.
-    AnalysisResult result = update(eventBus, defaultFlags().with(Flag.KEEP_GOING),
-        "//third_party/first", "//third_party/third");
-    assertThat(result.hasError()).isTrue();
-    assertThat(recorder.events).hasSize(2);
-    assertWithMessage(recorder.events.toString())
-        .that(
-            recorder.events.contains(
-                new LoadingFailureEvent(
-                    Label.parseAbsolute("//third_party/first", ImmutableMap.of()),
-                    Label.parseAbsolute("//third_party/fourth", ImmutableMap.of()))))
-        .isTrue();
-    assertThat(recorder.events)
-        .contains(
-            new LoadingFailureEvent(
-                Label.parseAbsolute("//third_party/third", ImmutableMap.of()),
-                Label.parseAbsolute("//third_party/fourth", ImmutableMap.of())));
-  }
-
-  @Test
   public void testMultipleRootCauseReporting() throws Exception {
     scratch.file("gp/BUILD",
         "sh_library(name = 'gp', deps = ['//p:p'])");
@@ -399,10 +358,7 @@ public class BuildViewTest extends BuildViewTestBase {
     Iterable<Dependency> targets =
         getView()
             .getDirectPrerequisiteDependenciesForTesting(
-                reporter,
-                top,
-                getBuildConfigurationCollection(),
-                /*toolchainLabels=*/ ImmutableSet.of())
+                reporter, top, getBuildConfigurationCollection(), /*toolchainContext=*/ null)
             .values();
 
     Dependency innerDependency =
@@ -427,7 +383,7 @@ public class BuildViewTest extends BuildViewTestBase {
   public void testConfigurationShortName() throws Exception {
     // Check that output directory name is still the name, otherwise this test is not testing what
     // we expect.
-    BuildConfiguration.Options options = Options.getDefaults(BuildConfiguration.Options.class);
+    CoreOptions options = Options.getDefaults(CoreOptions.class);
     options.outputDirectoryName = "/home/wonkaw/wonka_chocolate/factory/out";
     assertWithMessage("The flag's name may have been changed; this test may need to be updated.")
         .that(options.asMap().get("output directory name"))
@@ -455,6 +411,10 @@ public class BuildViewTest extends BuildViewTestBase {
   // Regression test: "output_filter broken (but in a different way)"
   @Test
   public void testOutputFilterSeeWarning() throws Exception {
+    if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
+      // TODO(b/129599328): fix or justify disabling
+      return;
+    }
     runAnalysisWithOutputFilter(Pattern.compile(".*"));
     assertContainsEvent("please do not import '//java/a:A.java'");
   }
@@ -466,12 +426,20 @@ public class BuildViewTest extends BuildViewTestBase {
       // TODO(b/67651960): fix or justify disabling.
       return;
     }
+    if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
+      // TODO(b/129599328): fix or justify disabling
+      return;
+    }
     runAnalysisWithOutputFilter(Pattern.compile("^//java/c"));
     assertNoEvents();
   }
 
   @Test
   public void testOutputFilterWithDebug() throws Exception {
+    if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
+      // TODO(b/129599328): fix or justify disabling
+      return;
+    }
     scratch.file(
         "java/a/BUILD",
         "java_library(name = 'a',",
@@ -545,12 +513,7 @@ public class BuildViewTest extends BuildViewTestBase {
         "sh_library(name = 'cycle2', deps = ['cycle1'])");
     scratch.file("badbuild/BUILD", "");
     reporter.removeHandler(failFastHandler);
-    injectGraphListenerForTesting(
-        new Listener() {
-          @Override
-          public void accept(SkyKey key, EventType type, Order order, Object context) {}
-        },
-        /*deterministic=*/ true);
+    injectGraphListenerForTesting(Listener.NULL_LISTENER, /*deterministic=*/ true);
     try {
       update("//foo:top");
       fail();
@@ -659,6 +622,10 @@ public class BuildViewTest extends BuildViewTestBase {
    */
   @Test
   public void testMultiBuildInvalidationRevalidation() throws Exception {
+    if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
+      // TODO(b/129599328): fix or justify disabling
+      return;
+    }
     scratch.file("java/a/A.java", "bla1");
     scratch.file("java/a/C.java", "bla2");
     scratch.file("java/a/BUILD",
@@ -1229,18 +1196,18 @@ public class BuildViewTest extends BuildViewTestBase {
         "x/extension.bzl",
         "def _aspect1_impl(target, ctx):",
         "  ctx.actions.do_nothing(mnemonic='Mnemonic')",
-        "  return struct()",
+        "  return []",
         "aspect1 = aspect(_aspect1_impl, attr_aspects=['deps'])",
         "",
         "def _injecting_rule_impl(ctx):",
-        "  return struct()",
+        "  return []",
         "injecting_rule = rule(_injecting_rule_impl, ",
         "    attrs = { 'deps' : attr.label_list(aspects = [aspect1]) })",
         "",
         "def _action_rule_impl(ctx):",
         "  out = ctx.actions.declare_file(ctx.label.name)",
         "  ctx.actions.run_shell(outputs = [out], command = 'dontcare', mnemonic='Mnemonic')",
-        "  return struct()",
+        "  return []",
         "action_rule = rule(_action_rule_impl, attrs = { 'deps' : attr.label_list() })");
 
     scratch.file(
@@ -1359,6 +1326,36 @@ public class BuildViewTest extends BuildViewTestBase {
     update("//foo");
     assertContainsEvent("WARNING /workspace/foo/BUILD:8:12: in deps attribute of custom_rule rule "
         + "//foo:foo: genrule rule '//foo:genlib' is unexpected here; continuing anyway");
+  }
+
+  @Test
+  public void testExistingRule() throws Exception {
+    scratch.file(
+        "pkg/BUILD",
+        "genrule(name='foo', ",
+        "        cmd = '',",
+        "        srcs=['a.src'],",
+        "        outs=['a.out'])",
+        "print(existing_rule('foo')['kind'])",
+        "print(existing_rule('bar'))");
+    reporter.setOutputFilter(RegexOutputFilter.forPattern(Pattern.compile("^//pkg")));
+    update("//pkg:foo");
+    assertContainsEvent("DEBUG /workspace/pkg/BUILD:5:1: genrule");
+    assertContainsEvent("DEBUG /workspace/pkg/BUILD:6:1: None");
+  }
+
+  @Test
+  public void testExistingRules() throws Exception {
+    scratch.file(
+        "pkg/BUILD",
+        "genrule(name='foo', ",
+        "        cmd = '',",
+        "        srcs=['a.src'],",
+        "        outs=['a.out'])",
+        "print(existing_rules().keys())");
+    reporter.setOutputFilter(RegexOutputFilter.forPattern(Pattern.compile("^//pkg")));
+    update("//pkg:foo");
+    assertContainsEvent("DEBUG /workspace/pkg/BUILD:5:1: [\"foo\"]");
   }
 
   /** Runs the same test with trimmed configurations. */

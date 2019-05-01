@@ -18,7 +18,7 @@
 
 PROTO_FILES=$(ls src/main/protobuf/*.proto src/main/java/com/google/devtools/build/lib/buildeventstream/proto/*.proto)
 LIBRARY_JARS=$(find third_party -name '*.jar' | grep -Fv JavaBuilder | grep -Fv third_party/guava | grep -Fv third_party/guava | grep -ve 'third_party/grpc/grpc.*jar' | tr "\n" " ")
-GRPC_JAVA_VERSION=1.10.0
+GRPC_JAVA_VERSION=1.20.0
 GRPC_LIBRARY_JARS=$(find third_party/grpc -name '*.jar' | grep -e ".*${GRPC_JAVA_VERSION}.*jar" | tr "\n" " ")
 GUAVA_VERSION=25.1
 GUAVA_JARS=$(find third_party/guava -name '*.jar' | grep -e ".*${GUAVA_VERSION}.*jar" | tr "\n" " ")
@@ -226,7 +226,13 @@ if [ -z "${BAZEL_SKIP_JAVA_COMPILATION}" ]; then
   cat <<EOF >${BAZEL_TOOLS_REPO}/WORKSPACE
 workspace(name = 'bazel_tools')
 EOF
-  link_dir ${PWD}/src ${BAZEL_TOOLS_REPO}/src
+
+  mkdir -p "${BAZEL_TOOLS_REPO}/src/conditions"
+  link_file "${PWD}/src/conditions/BUILD.tools" \
+      "${BAZEL_TOOLS_REPO}/src/conditions/BUILD"
+  link_children "${PWD}" src/conditions "${BAZEL_TOOLS_REPO}"
+  link_children "${PWD}" src "${BAZEL_TOOLS_REPO}"
+
   link_dir ${PWD}/third_party ${BAZEL_TOOLS_REPO}/third_party
 
   # Create @bazel_tools//tools/cpp/runfiles

@@ -103,16 +103,14 @@ public abstract class AndroidBinary implements RuleConfiguredTargetFactory {
 
   protected abstract CppSemantics createCppSemantics();
 
-  protected abstract AndroidMigrationSemantics createAndroidMigrationSemantics();
-
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
       throws InterruptedException, RuleErrorException, ActionConflictException {
     CppSemantics cppSemantics = createCppSemantics();
     JavaSemantics javaSemantics = createJavaSemantics();
     AndroidSemantics androidSemantics = createAndroidSemantics();
+    androidSemantics.checkForMigrationTag(ruleContext);
     androidSemantics.validateAndroidBinaryRuleContext(ruleContext);
-    createAndroidMigrationSemantics().validateRuleContext(ruleContext);
     AndroidSdkProvider.verifyPresence(ruleContext);
 
     NestedSetBuilder<Artifact> filesBuilder = NestedSetBuilder.stableOrder();
@@ -625,7 +623,7 @@ public abstract class AndroidBinary implements RuleConfiguredTargetFactory {
             new ApkInfo(
                 zipAlignedApk,
                 unsignedApk,
-                getCoverageInstrumentationJarForApk(ruleContext, androidCommon),
+                getCoverageInstrumentationJarForApk(ruleContext),
                 resourceApk.getManifest(),
                 AndroidCommon.getApkDebugSigningKey(ruleContext)))
         .addNativeDeclaredProvider(new AndroidPreDexJarProvider(jarToDex))
@@ -637,20 +635,17 @@ public abstract class AndroidBinary implements RuleConfiguredTargetFactory {
 
   /**
    * For coverage builds, this returns a Jar containing <b>un</b>instrumented bytecode for the
-   * coverage reporter's consumption.  This Jar is often confusingly called <i>instrumented</i>.
-   * This method simply returns the deploy Jar when "new" coverage is used, otherwise the
-   * traditional "instrumented" Jar.  Note the deploy Jar is built anyway for Android binaries.
+   * coverage reporter's consumption. This method simply returns the deploy Jar. Note the deploy Jar
+   * is built anyway for Android binaries.
    *
    * @return A Jar containing uninstrumented bytecode or {@code null} for non-coverage builds
    */
   @Nullable
-  private static Artifact getCoverageInstrumentationJarForApk(
-      RuleContext ruleContext, AndroidCommon androidCommon) throws InterruptedException {
-    if (ruleContext.getConfiguration().isCodeCoverageEnabled()
-        && ruleContext.getConfiguration().isExperimentalJavaCoverage()) {
-      return ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_BINARY_DEPLOY_JAR);
-    }
-    return androidCommon.getInstrumentedJar();
+  private static Artifact getCoverageInstrumentationJarForApk(RuleContext ruleContext)
+      throws InterruptedException {
+    return ruleContext.getConfiguration().isCodeCoverageEnabled()
+        ? ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_BINARY_DEPLOY_JAR)
+        : null;
   }
 
   public static NestedSet<Artifact> getLibraryResourceJars(RuleContext ruleContext) {

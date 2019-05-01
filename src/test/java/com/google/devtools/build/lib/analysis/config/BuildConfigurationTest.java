@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
@@ -111,9 +112,9 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
 
   @Test
   public void testCaching() throws Exception {
-    BuildConfiguration.Options a = Options.getDefaults(BuildConfiguration.Options.class);
-    BuildConfiguration.Options b = Options.getDefaults(BuildConfiguration.Options.class);
-    // The String representations of the BuildConfiguration.Options must be equal even if these are
+    CoreOptions a = Options.getDefaults(CoreOptions.class);
+    CoreOptions b = Options.getDefaults(CoreOptions.class);
+    // The String representations of the CoreOptions must be equal even if these are
     // different objects, if they were created with the same options (no options in this case).
     assertThat(b.toString()).isEqualTo(a.toString());
     assertThat(b.cacheKey()).isEqualTo(a.cacheKey());
@@ -233,7 +234,7 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
         .isSameAs(config2.getFragment(J2ObjcConfiguration.class));
     // Distinct because the j2objc options differ:
     assertThat(config1.getFragment(J2ObjcConfiguration.class))
-        .isNotSameAs(config3.getFragment(J2ObjcConfiguration.class));
+        .isNotSameInstanceAs(config3.getFragment(J2ObjcConfiguration.class));
   }
 
   @Test
@@ -251,6 +252,36 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
   public void testCommandLineVariablesOverride() throws Exception {
     BuildConfiguration config = create("--define", "a=b", "--define", "a=c");
     assertThat(config.getCommandLineBuildVariables().get("a")).isEqualTo("c");
+  }
+
+  @Test
+  public void testNormalization_definesWithSameName_collapseDuplicateDefinesDisabled()
+      throws Exception {
+    BuildConfiguration config =
+        create("--nocollapse_duplicate_defines", "--define", "a=1", "--define", "a=2");
+    CoreOptions options = config.getOptions().get(CoreOptions.class);
+    assertThat(ImmutableListMultimap.copyOf(options.commandLineBuildVariables))
+        .containsExactly("a", "1", "a", "2")
+        .inOrder();
+    assertThat(config).isNotEqualTo(create("--nocollapse_duplicate_defines", "--define", "a=2"));
+  }
+
+  @Test
+  public void testNormalization_definesWithDifferentNames() throws Exception {
+    BuildConfiguration config =
+        create("--collapse_duplicate_defines", "--define", "a=1", "--define", "b=2");
+    CoreOptions options = config.getOptions().get(CoreOptions.class);
+    assertThat(ImmutableMap.copyOf(options.commandLineBuildVariables))
+        .containsExactly("a", "1", "b", "2");
+  }
+
+  @Test
+  public void testNormalization_definesWithSameName() throws Exception {
+    BuildConfiguration config =
+        create("--collapse_duplicate_defines", "--define", "a=1", "--define", "a=2");
+    CoreOptions options = config.getOptions().get(CoreOptions.class);
+    assertThat(ImmutableMap.copyOf(options.commandLineBuildVariables)).containsExactly("a", "2");
+    assertThat(config).isEqualTo(create("--collapse_duplicate_defines", "--define", "a=2"));
   }
 
   // This is really a test of option parsing, not command-line variable

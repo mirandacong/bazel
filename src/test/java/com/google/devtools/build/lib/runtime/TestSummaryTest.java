@@ -206,7 +206,7 @@ public class TestSummaryTest {
     assertThat(summaryCopy.getTarget()).isEqualTo(summary.getTarget());
     assertThat(summaryCopy.getStatus()).isEqualTo(summary.getStatus());
     assertThat(summaryCopy.numCached()).isEqualTo(summary.numCached());
-    assertThat(summaryCopy).isNotSameAs(summary);
+    assertThat(summaryCopy).isNotSameInstanceAs(summary);
     assertThat(summary.totalRuns()).isEqualTo(0);
     assertThat(summaryCopy.totalRuns()).isEqualTo(1);
 
@@ -222,13 +222,6 @@ public class TestSummaryTest {
     TestSummary sixtyCached = basicBuilder.setNumCached(60).build();
     assertThat(sixtyCached.numCached()).isEqualTo(60);
     assertThat(fiftyCached.numCached()).isEqualTo(50);
-
-    TestSummary failedCacheTemplate = TestSummary.newBuilderFromExisting(fiftyCached)
-        .setStatus(BlazeTestStatus.FAILED)
-        .build();
-    assertThat(failedCacheTemplate.numCached()).isEqualTo(50);
-    assertThat(failedCacheTemplate.getStatus()).isEqualTo(BlazeTestStatus.FAILED);
-    assertThat(failedCacheTemplate.getTotalTestCases()).isEqualTo(fiftyCached.getTotalTestCases());
   }
 
   @Test
